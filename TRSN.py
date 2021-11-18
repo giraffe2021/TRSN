@@ -331,7 +331,6 @@ class TRSN(tf.keras.Model):
             1)
         logits_weights_support_self = tf.expand_dims(logits_weights_support_self, -1)
         logits_weights_support_self_stop_gradient = tf.stop_gradient(logits_weights_support_self)
-        # logits_weights_query_referenced_stop_gradient = 0.5 * logits_weights_query_referenced_stop_gradient + 0.5 * logits_weights_support_self_stop_gradient
         local_logits_support = pred_local_support[..., 0]
         weighted_local_logits_support = logits_weights_support * local_logits_support
         weighted_local_logits_support = tf.math.divide_no_nan(tf.reduce_sum(weighted_local_logits_support, [-3, -2]),
@@ -352,7 +351,7 @@ class TRSN(tf.keras.Model):
                        [*tf.unstack(tf.shape(query_global_label)), 1, 1]) * logits_weights_query_self,
             1)
         logits_weights_query_self = tf.expand_dims(logits_weights_query_self, -1)
-        logits_weights_query_self = tf.stop_gradient(logits_weights_query_self)
+        logits_weights_query_self_stop_gradient = tf.stop_gradient(logits_weights_query_self)
 
         support_logits = self.gap(self.last_max_pooling(features_support))
         query_logits = self.gap(self.last_max_pooling(features_query))
@@ -373,16 +372,24 @@ class TRSN(tf.keras.Model):
 
         loss_clc = tf.reduce_mean(
             tf.keras.losses.categorical_crossentropy(
-                tf.concat([support_global_label, query_global_label, support_global_label, support_global_label], 0),
+                tf.concat([support_global_label, query_global_label], 0),
                 tf.concat(
-                    [support_pred, query_pred, weighted_local_logits_support_pred, weighted_local_logits_query_pred],
+                    [support_pred, query_pred],
                     0),
                 from_logits=True))
 
+        loss_clc = 0.5 * loss_clc + 0.5 * tf.reduce_mean(
+            tf.keras.losses.categorical_crossentropy(
+                tf.concat([support_global_label, support_global_label], 0),
+                tf.concat(
+                    [weighted_local_logits_support_pred, weighted_local_logits_query_pred],
+                    0),
+                from_logits=True))
         loss_clc = tf.clip_by_value(loss_clc, 0., 10.)
 
+        pseudo_label = 0.5 * logits_weights_query_self_stop_gradient + 0.5 * logits_weights_query_referenced_stop_gradient
         salient_loss = tf.reduce_mean(
-            tf.keras.losses.binary_crossentropy(logits_weights_query_self, self_attention_query))
+            tf.keras.losses.binary_crossentropy(pseudo_label, self_attention_query))
 
         neg_sample_indices_query = tf.where(tf.equal(0., query_global_label))
         neg_samples_query = tf.gather_nd(tf.transpose(pred_local_softmax_query, [0, 3, 1, 2, 4]),
@@ -636,7 +643,7 @@ class TRSN(tf.keras.Model):
         scheduled_lrs = WarmUpStep(
             learning_rate_base=lr,
             warmup_learning_rate=0.0,
-            warmup_steps=steps_per_epoch,
+            warmup_steps=steps_per_epoch * 5,
         )
 
         self.compile(tf.keras.optimizers.Adam(scheduled_lrs))
@@ -1160,6 +1167,7 @@ mirrored_strategy = tf.distribute.MirroredStrategy()
 with mirrored_strategy.scope():
     model = TRSN(imageshape=(84, 84, 3), num_class=64)
 model.run()
-# model.show("/data/giraffe/0_FSL/TRSN_ckpts/model_e139-l 0.82967.h5")
-# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e139-l 0.82967.h5", shots=5)
-# model.fine_tune(lr=0.0001, weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e667-l 0.82524.h5")
+# model.show("/data/giraffe/0_FSL/TRSN_ckpts/model_e328-l 0.83613.h5")
+# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e328-l 0.83613.h5", shots=1)
+# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e328-l 0.83613.h5", shots=5)
+# model.fine_tune(lr=0.0001, weights=""/data/giraffe/0_FSL/TRSN_ckpts/model_e328-l 0.83613.h5"")

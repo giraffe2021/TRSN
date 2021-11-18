@@ -91,10 +91,10 @@ def ResNet_12(input_shape=(84, 84, 3), pooling=False, use_bias=False,
     x = make_basic_block(x, use_bias=use_bias, filter_num=160, drop_rate=0.2,
                          pooling=True)
 
-    x = make_basic_block(x, use_bias=use_bias, filter_num=320, drop_rate=0.2, drop_block=False, dropblock_size=5,
+    x = make_basic_block(x, use_bias=use_bias, filter_num=320, drop_rate=0.2, drop_block=True, dropblock_size=5,
                          pooling=True)
 
-    x = make_basic_block(x, use_bias=use_bias, filter_num=640, drop_rate=0.2, drop_block=False, dropblock_size=5,
+    x = make_basic_block(x, use_bias=use_bias, filter_num=640, drop_rate=0.2, drop_block=True, dropblock_size=5,
                          pooling=False)
 
     if pooling == 'avg':
