@@ -16,15 +16,18 @@ try:
 except:
     from mini_imagenet_name import data_name_dict
 
+resize_size = 92
+center_crop_size = 84
+
 
 @tf.function
 def read_image(path):
     image = tf.io.read_file(path)  # 根据路径读取图片
     image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
     image = tf.cast(image, dtype=tf.float32) / 255.
-    image = tf.image.resize(image, [92, 92])
-    image = tf.image.central_crop(image, 84 / 92.)
-    image = tf.image.resize(image, [84, 84])
+    image = tf.image.resize(image, [resize_size, resize_size])
+    image = tf.image.central_crop(image, center_crop_size / resize_size)
+    image = tf.image.resize(image, [center_crop_size, center_crop_size])
     return image
 
 
@@ -84,7 +87,7 @@ def read_image_with_random_crop_resize(path):
     image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
 
     image = tf.cast(image, dtype=tf.float32) / 255.
-    image = random_resize_and_crop(image, (84, 84))
+    image = random_resize_and_crop(image, (center_crop_size, center_crop_size))
     return image
 
 
@@ -105,8 +108,62 @@ def split(x, y, g_y, way_num, episode_test_sample_num):
     return (support_x, surport_y, surport_g_y), (query_x, query_y, query_g_y)
 
 
-class MiniImageNetDataLoader:
-    def __init__(self, data_dir_path, way_num=5, shot_num=1, episode_test_sample_num=15):
+@tf.function
+def process_with_crop(path, global_label,
+                      global_label_depth):
+    image = tf.io.read_file(path)  # 根据路径读取图片
+    image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
+    image = tf.cast(image, dtype=tf.float32) / 255.
+    image = random_resize_and_crop(image)
+    image = do_augmentations(image)
+    global_label = tf.one_hot(global_label, axis=-1, depth=global_label_depth)
+    return image, global_label
+
+
+@tf.function
+def process_with_crop_with_contrastive(path, global_label,
+                                       global_label_depth, p=0.5):
+    image = tf.io.read_file(path)  # 根据路径读取图片
+    image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
+    image = tf.cast(image, dtype=tf.float32) / 255.
+    image = random_resize_and_crop(image, ratio_min=0.8, ratio_max=4.)
+
+    chance = tf.random.uniform([], 0, 100, dtype=tf.int32)
+
+    @tf.function
+    def process(x):
+        x = horizontal_randomFlip(tf.expand_dims(x, 0))[0]
+        x = color_jitter(x)
+        x = color_drop(x)
+        return x
+
+    x = tf.case([(tf.less(chance, tf.cast(p * 100, dtype=tf.int32)),
+                  lambda: process(image))],
+                default=lambda: image)
+    x_rotated_1, rotate_label_1 = rotation_process_with_limit(x)
+    x_rotated_2, rotate_label_2 = rotation_process_with_limit(x)
+    x_resized_1, ratio_1 = ratio_process(x, ratio_min=0.25, ratio_max=2.25)
+    x_resized_2, ratio_2 = ratio_process(x, ratio_min=0.25, ratio_max=2.25)
+
+    global_label = tf.one_hot(global_label, axis=-1, depth=global_label_depth)
+    return (image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2), (
+        global_label, rotate_label_1, rotate_label_2, ratio_1, ratio_2)
+
+
+@tf.function
+def process_with_regular_crop(path, global_label,
+                              global_label_depth, k=3):
+    image = tf.io.read_file(path)  # 根据路径读取图片
+    image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
+    image = tf.cast(image, dtype=tf.float32) / 255.
+    image = random_resize_and_crop_simple(image)
+    image = simple_augmentations(image)
+    global_label = tf.one_hot(global_label, axis=-1, depth=global_label_depth)
+    return image, global_label
+
+
+class DataLoader:
+    def __init__(self, data_dir_path):
         self.base_dir = data_dir_path
         self.meta_test_folder = os.path.join(self.base_dir, "test")
         self.meta_val_folder = os.path.join(self.base_dir, "val")
@@ -123,6 +180,8 @@ class MiniImageNetDataLoader:
                                             enumerate(self.meta_test_folder_lists)}
 
         self.meta_test_image_dict = {foldername: os.listdir(foldername) for index, foldername in
+                                     enumerate(self.meta_test_folder_lists)}
+        self.meta_test_image_dict = {foldername: [] for index, foldername in
                                      enumerate(self.meta_test_folder_lists)}
         for k, v in self.meta_test_image_dict.items():
             fileList = []
@@ -382,17 +441,6 @@ class MiniImageNetDataLoader:
                     mix_up=False,
                     epochs=1):
 
-        # @tf.function
-        # def read_image(path, meta_label, global_label):
-        #     image = tf.io.read_file(path)  # 根据路径读取图片
-        #     image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
-        #
-        #     image = tf.cast(image, dtype=tf.float32) / 255.
-        #
-        #     meta_label = tf.cast(meta_label, dtype=tf.int64)
-        #     global_label = tf.cast(global_label, dtype=tf.int64)
-        #     return image, meta_label, global_label
-
         if episode_num is None:
             if phase == 'train':
                 episode_num = 20000
@@ -447,19 +495,7 @@ class MiniImageNetDataLoader:
                        augment=False,
                        mix_up=False,
                        epochs=1,
-                       putback=True
-                       ):
-
-        # @tf.function
-        # def read_image(path, meta_label, global_label):
-        #     image = tf.io.read_file(path)  # 根据路径读取图片
-        #     image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
-        #
-        #     image = tf.cast(image, dtype=tf.float32) / 255.
-        #
-        #     meta_label = tf.cast(meta_label, dtype=tf.int64)
-        #     global_label = tf.cast(global_label, dtype=tf.int64)
-        #     return image, meta_label, global_label
+                       putback=True):
 
         if episode_num is None:
             if phase == 'train':
@@ -527,12 +563,25 @@ class MiniImageNetDataLoader:
                                                                                                               drop_remainder=True)
                 ds_episode = ds_episode.concatenate(ds_episode_with_out_augments)
             else:
-                ds = tf.data.Dataset.from_tensor_slices(data_set)
+                splits = episode_num // 2
+                splits_data_set = (data_set[0][:splits], data_set[1][:splits], data_set[2][:splits])
+                ds = tf.data.Dataset.from_tensor_slices(splits_data_set).shuffle(10000)
                 ds_episode = ds.map(partial(process,
                                             way_num=way_num,
                                             episode_test_sample_num=episode_test_sample_num,
                                             global_label_depth=global_label_depth),
                                     num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(batch, drop_remainder=True)
+
+                splits_data_set = (
+                    data_set[0][splits:], data_set[1][splits:], data_set[2][splits:])
+                ds = tf.data.Dataset.from_tensor_slices(splits_data_set).shuffle(10000)
+                ds_episode_with_out_augments = ds.map(partial(process_without_augment,
+                                                              way_num=way_num,
+                                                              episode_test_sample_num=episode_test_sample_num,
+                                                              global_label_depth=global_label_depth),
+                                                      num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(batch,
+                                                                                                              drop_remainder=True)
+                ds_episode = ds_episode.concatenate(ds_episode_with_out_augments)
 
             if dataset is None:
                 dataset = ds_episode
@@ -540,9 +589,9 @@ class MiniImageNetDataLoader:
                 dataset = dataset.concatenate(ds_episode)
         return dataset, name_projector
 
-    def get_all_dataset(self, phase='train', batch=1, augment=False):
+    def get_all_dataset(self, phase='train', batch=1, augment=False, contrastive=False):
         image_list, label_list, global_label_depth = self.generate_origin_data_list(phase)
-        ds = tf.data.Dataset.from_tensor_slices((image_list, label_list)).shuffle(max(10000, len(image_list)))
+        ds = tf.data.Dataset.from_tensor_slices((image_list, label_list)).shuffle(max(100000, len(image_list)))
 
         @tf.function
         def process(path, global_label, global_label_depth):
@@ -550,38 +599,193 @@ class MiniImageNetDataLoader:
             global_label = tf.one_hot(global_label, axis=-1, depth=global_label_depth)
             return image, global_label
 
-        @tf.function
-        def process_with_crop(path, global_label,
-                              global_label_depth):
-            image = tf.io.read_file(path)  # 根据路径读取图片
-            image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
-            image = tf.cast(image, dtype=tf.float32) / 255.
-            image = random_resize_and_crop_simple(image)
-            image = simple_augmentations(image)
-            global_label = tf.one_hot(global_label, axis=-1, depth=global_label_depth)
-            return image, global_label
-
         if augment is True:
             process = process_with_crop
-
+            if contrastive is True:
+                process = process_with_crop_with_contrastive
+        else:
+            if contrastive is True:
+                process = partial(process_with_crop_with_contrastive, p=0.)
         ds_episode = ds.map(partial(process, global_label_depth=global_label_depth),
                             num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(batch)
-        return ds_episode
+        return ds_episode, len(image_list)
+
+    def get_dataset_V3(self, phase='train', way_num=5, shot_num=5, episode_test_sample_num=15, episode_num=None,
+                       batch=1,
+                       augment=False,
+                       mix_up=False,
+                       epochs=1):
+
+        if episode_num is None:
+            if phase == 'train':
+                episode_num = 2000
+            else:
+                episode_num = 600
+
+        num_samples_per_class = shot_num + episode_test_sample_num
+        if phase == 'train':
+            all_data_set, global_label_depth, name_projector = self.generate_data_list_no_putback(way_num,
+                                                                                                  num_samples_per_class,
+                                                                                                  episode_num=episode_num * epochs,
+                                                                                                  phase=phase)
+        else:
+            all_data_set, global_label_depth, name_projector = self.generate_data_list(way_num,
+                                                                                       num_samples_per_class,
+                                                                                       episode_num=episode_num * epochs,
+                                                                                       phase=phase)
+
+        dataset = None
+        for ep in tqdm(range(epochs)):
+            data_set = all_data_set[0][ep * episode_num:(ep + 1) * episode_num] \
+                , all_data_set[1][ep * episode_num:(ep + 1) * episode_num] \
+                , all_data_set[2][ep * episode_num:(ep + 1) * episode_num]
+            if augment is True:
+                process = process_with_augment
+            else:
+                process = process_without_augment
+
+            ds = tf.data.Dataset.from_tensor_slices(data_set).shuffle(10000)
+            ds_episode = ds.map(partial(process,
+                                        way_num=way_num,
+                                        episode_test_sample_num=episode_test_sample_num,
+                                        global_label_depth=global_label_depth),
+                                num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(batch, drop_remainder=True)
+
+            if phase == 'train':
+                ds_episode_with_out_augments = ds.map(partial(process_without_augment,
+                                                              way_num=way_num,
+                                                              episode_test_sample_num=episode_test_sample_num,
+                                                              global_label_depth=global_label_depth),
+                                                      num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(batch,
+                                                                                                              drop_remainder=True)
+                ds_episode = ds_episode.concatenate(ds_episode_with_out_augments)
+
+                if mix_up is True:
+                    ds_episode_mixup = ds.map(partial(process_with_mip_up_augment,
+                                                      way_num=way_num,
+                                                      episode_test_sample_num=episode_test_sample_num,
+                                                      global_label_depth=global_label_depth),
+                                              num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(batch,
+                                                                                                      drop_remainder=True)
+                    ds_episode = ds_episode_mixup.concatenate(ds_episode)
+
+            if dataset is None:
+                dataset = ds_episode
+            else:
+                dataset = dataset.concatenate(ds_episode)
+
+        return dataset, name_projector
 
 
 if __name__ == '__main__':
-    data_dir_path = "/data/giraffe/0_FSL/data/mini_imagenet_tools/processed_images_origin"
-    dataloader = MiniImageNetDataLoader(data_dir_path=data_dir_path)
+    data_dir_path = "/data2/giraffe/0_FSL/data/mini_imagenet_tools/processed_images_224"
+    dataloader = DataLoader(data_dir_path=data_dir_path)
     # meta_train_ds, meta_train_name_projector = dataloader.get_dataset_V2(phase='train', way_num=5, shot_num=5,
     #                                                                      episode_test_sample_num=5,
     #                                                                      episode_num=600,
     #                                                                      batch=4,
     #                                                                      augment=False)
-    ds = dataloader.get_all_dataset(augment=True)
 
-    for data in ds:
-        img, y = data
-        img = img * 255.
-        cv2.imshow("image", img.numpy()[0].astype(np.uint8)[..., ::-1])
-        cv2.waitKey(0)
-        pass
+    contrastive = True
+    meta_train_ds, steps_per_epoch = dataloader.get_all_dataset(phase='train', batch=8,
+                                                                augment=True, contrastive=contrastive)
+
+    if contrastive:
+        for x, y in meta_train_ds:
+            image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2 = x
+            y, rotate_label_1, rotate_label_2, resize_label_1, resize_label_2 = y
+            for image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2, \
+                y, rotate_label_1, rotate_label_2, resize_label_1, resize_label_2 in zip(image, x_rotated_1,
+                                                                                         x_rotated_2,
+                                                                                         x_resized_1, x_resized_2,
+                                                                                         y, rotate_label_1,
+                                                                                         rotate_label_2,
+                                                                                         resize_label_1,
+                                                                                         resize_label_2):
+                image = (image * 255).numpy().astype(np.uint8)[..., ::-1]
+                x_rotated_1 = (x_rotated_1 * 255).numpy().astype(np.uint8)[..., ::-1]
+                x_rotated_2 = (x_rotated_2 * 255).numpy().astype(np.uint8)[..., ::-1]
+                x_resized_1 = (x_resized_1 * 255).numpy().astype(np.uint8)[..., ::-1]
+                x_resized_2 = (x_resized_2 * 255).numpy().astype(np.uint8)[..., ::-1]
+                merge_rotated = cv2.hconcat([image, x_rotated_1, x_rotated_2])
+                merge_resized = cv2.hconcat([image, x_resized_1, x_resized_2])
+                y = tf.argmax(y, -1).numpy()
+                rotate_label_1 = rotate_label_1.numpy() * 360
+                rotate_label_2 = rotate_label_2.numpy() * 360
+                resize_label_1 = resize_label_1.numpy()
+                resize_label_2 = resize_label_2.numpy()
+
+                cv2.namedWindow("merge_rotated", 0)
+                cv2.namedWindow("merge_resized", 0)
+                cv2.imshow("merge_rotated", merge_rotated)
+                cv2.imshow("merge_resized", merge_resized)
+
+                cv2.putText(merge_rotated, "{}  {}  {}".format(y, rotate_label_1, rotate_label_2), (0, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.35,
+                            (255, 255, 0), 1)
+                cv2.putText(merge_resized, "{}  {}  {}".format(y, resize_label_1, resize_label_2), (0, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.35,
+                            (255, 255, 0), 1)
+                merge = cv2.vconcat([merge_rotated, merge_resized])
+                cv2.namedWindow("merge", 0)
+                cv2.imshow("merge", merge)
+                cv2.waitKey(0)
+    else:
+        for x, y in meta_train_ds:
+            for image, y in zip(x, y):
+                image = (image * 255).numpy().astype(np.uint8)[..., ::-1]
+                y = tf.argmax(y, -1).numpy()
+                cv2.namedWindow("image", 0)
+                cv2.imshow("image", image)
+                cv2.waitKey(0)
+
+    random.seed(100)
+    ways = 5
+    shots = 5
+    train_test_num = 5
+    train_batch = 4
+    episode_num = 400
+    steps_per_epoch = episode_num // train_batch
+    train_epoch = 1
+    mix_up = False
+    augment = True
+    meta_train_ds, meta_train_name_projector = dataloader.get_dataset_V3(phase='train', way_num=ways,
+                                                                         shot_num=shots,
+                                                                         episode_test_sample_num=train_test_num,
+                                                                         episode_num=episode_num,
+                                                                         batch=train_batch,
+                                                                         augment=augment,
+                                                                         mix_up=mix_up,
+                                                                         epochs=train_epoch)
+
+    for data in meta_train_ds:
+        support, query = data
+        support_image, support_label, support_global_label = support
+        query_image, query_label, query_global_label = query
+
+        image_shape = tf.unstack(tf.shape(support_image)[-3:])
+        dim_shape = tf.shape(support_label)[-1]
+        global_dim_shape = tf.shape(support_global_label)[-1]
+
+        batch = tf.shape(support_image)[0]
+        ways = tf.shape(support_image)[1]
+        shots = tf.shape(support_image)[2]
+        query_shots = tf.shape(query_image)[2]
+
+        support_x = tf.reshape(support_image, [-1, *image_shape])
+        query_x = tf.reshape(query_image, [-1, *image_shape])
+
+        support_global_label = tf.reshape(support_global_label, [-1, global_dim_shape])
+        query_global_label = tf.reshape(query_global_label, [-1, global_dim_shape])
+
+        for image in support_x:
+            x_rotated, rotate_degree = rotation_process_v2(image, 4)
+            tf.print(rotate_degree)
+            image = (image * 255).numpy().astype(np.uint8)[..., ::-1]
+            x_rotated = (x_rotated * 255).numpy().astype(np.uint8)[..., ::-1]
+
+            cv2.imshow("image", image)
+            cv2.imshow("x_rotated", x_rotated)
+            cv2.waitKey(0)

@@ -29,8 +29,8 @@ def random_augment(x, p=0.8):
     @tf.function
     def random_augment_(x):
         process_seq = list()
-        # process_seq.append(partial(tf.image.random_brightness, max_delta=0.1))
-        # process_seq.append(partial(tf.image.random_contrast, lower=0.8, upper=1.2))
+        process_seq.append(partial(tf.image.random_brightness, max_delta=0.1))
+        process_seq.append(partial(tf.image.random_contrast, lower=0.8, upper=1.2))
         process_seq.append(partial(tf.image.random_hue, max_delta=0.3))
         process_seq.append(partial(tf.image.random_saturation, lower=0.5, upper=1.5))
         # process_seq.append(channel_shuffle)
@@ -54,16 +54,16 @@ def random_augment(x, p=0.8):
 
 
 @tf.function
-def ratio_process(x, ratio_min=0.25, ratio_max=4, min_size=16, max_size=1024):
+def ratio_process(x, ratio_min=0.25, ratio_max=4, min_size=16, max_size=512):
     origin_size = tf.shape(x)
-    # max_len = tf.reduce_max(origin_size)
-    # min_len = tf.reduce_min(origin_size)
-    # ratio_max = tf.cast(tf.minimum(max_size / max_len, ratio_max), tf.float32)
-    # ratio_min = tf.cast(tf.maximum(min_size / min_len, ratio_min), tf.float32)
-    ratio = tf.random.uniform([], ratio_min, ratio_max, dtype=tf.float32)
+    max_len = tf.reduce_max(origin_size[:-1])
+    min_len = tf.reduce_min(origin_size[:-1])
+    ratio_max = tf.cast(tf.minimum(max_size / max_len, ratio_max), tf.float32)
+    ratio_min = tf.cast(tf.maximum(min_size / min_len, ratio_min), tf.float32)
+    ratio = tf.random.uniform([1], ratio_min, ratio_max, dtype=tf.float32)
     new_shape = tf.cast(tf.cast(origin_size, dtype=ratio.dtype) * ratio, dtype=origin_size.dtype)[:2]
     origin_type = x.dtype
-    x = tf.image.resize(x, size=new_shape, method='bicubic')
+    x = tf.image.resize(x, size=new_shape)
     x = tf.cond(ratio > tf.cast(1, ratio.dtype),
                 lambda: tf.image.random_crop(x, origin_size),
                 lambda: tf.image.resize_with_crop_or_pad(
@@ -71,7 +71,7 @@ def ratio_process(x, ratio_min=0.25, ratio_max=4, min_size=16, max_size=1024):
                                        dtype=origin_size.dtype)),
                     origin_size[0], origin_size[1]))
 
-    ratio = (ratio - ratio_min) / (ratio_max - ratio_min)
+    # ratio = (ratio - ratio_min) / (ratio_max - ratio_min)
     x = tf.cast(x, origin_type)
     return x, ratio
 
@@ -118,11 +118,14 @@ def rotation_process(x):
 def rotation_process_with_limit(x, theta=360):
     theta_range = theta / 180. * 3.141592653589793
     origin_size = tf.shape(x)[:2]
-    angel = tf.random.uniform([], -theta_range, theta_range, dtype=tf.float32)
+    angel = tf.random.uniform([1], -theta_range, theta_range, dtype=tf.float32)
+    angel = tf.cond(angel < 0., lambda: angel + (3.141592653589793 * 2),
+                    lambda: angel)
     x = tf.tile(x, tf.cast([3, 3, 1], dtype=origin_size.dtype))
     x = tfa.image.rotate(x, angel, "BILINEAR")
     x = tf.image.central_crop(x, 1 / 3)
     x = tf.image.resize(x, origin_size)
+
     return x, angel / (3.141592653589793 * 2)
 
 
@@ -139,7 +142,7 @@ def rotation_process_v2(x, sample_class=2):
     x = tfa.image.rotate(x, angel, "BILINEAR")
     x = tf.image.central_crop(x, 1 / 3)
     x = tf.image.resize(x, origin_size)
-    x = random_augment(x)
+    # x = random_augment(x)
     return x, tf.one_hot(regin_id, sample_class)
 
 
@@ -170,10 +173,11 @@ randomZoom = tf.keras.layers.experimental.preprocessing.RandomZoom(
     interpolation="bilinear",
 )
 randomFlip = tf.keras.layers.experimental.preprocessing.RandomFlip()
+horizontal_randomFlip = tf.keras.layers.experimental.preprocessing.RandomFlip(mode="horizontal")
 
 
 @tf.function
-def random_resize_and_crop(x, size=(84, 84), ratio_min=0.25, ratio_max=1.5, max_size=512):
+def random_resize_and_crop(x, size=(84, 84), ratio_min=0.25, ratio_max=4., max_size=512):
     origin_size = tf.shape(x)
     max_len = tf.reduce_max(origin_size)
     x = tf.cond(max_len > tf.cast(max_size, origin_size.dtype),
@@ -185,27 +189,80 @@ def random_resize_and_crop(x, size=(84, 84), ratio_min=0.25, ratio_max=1.5, max_
 
 
 @tf.function
-def do_augmentations(x, p=0.4):
+def random_resize_and_crop_simple(x, size=(84, 84), ratio_min=0.25, ratio_max=4., max_size=1024):
+    origin_size = tf.shape(x)[:-1]
+    max_len = tf.reduce_max(origin_size)
+    x = tf.cond(max_len > tf.cast(max_size, origin_size.dtype),
+                lambda: tf.image.resize(x, (max_size, max_size), preserve_aspect_ratio=True),
+                lambda: x)
+    new_size = tf.shape(x)[:-1]
+    max_len = tf.reduce_min(new_size)
+    ratio = tf.random.uniform([], ratio_min, ratio_max, dtype=tf.float32)
+    crop_size = tf.maximum(tf.cast(tf.cast(max_len, tf.float32) * ratio, tf.int32), 1)
+    tf.print(crop_size, max_len, ratio)
+    x = tf.image.random_crop(x, (crop_size, crop_size, 3))
+    x = tf.image.resize(x, size)
+    return x
+
+
+@tf.function
+def regular_crop(x, size=(84, 84), k=3):
+    new_size = size[0] * k
+    new_x = tf.image.resize(x, (new_size, new_size))
+    x_splits = tf.split(new_x, k, axis=-2)
+    out = tf.vectorized_map(partial(tf.split, num_or_size_splits=k, axis=-3), tf.stack(x_splits, -4))
+    out = tf.concat(out, -4)
+    return out
+
+
+@tf.function
+def simple_augmentations(x, p=0.4):
+    chance = tf.random.uniform([], 0, 100, dtype=tf.int32)
+    x = tf.cast(x, tf.float32)
+
+    @tf.function
+    def process(x):
+        x = randomFlip(tf.expand_dims(x, 0))[0]
+        # x = random_rotate(x)
+        return x
+
+    x_contra = tf.case([(tf.less(chance, tf.cast(p * 100, dtype=tf.int32)),
+                         lambda: process(x))],
+                       default=lambda: x)
+
+    return x_contra
+
+
+@tf.function
+def do_augmentations(x, p=0.5):
     chance = tf.random.uniform([], 0, 100, dtype=tf.int32)
     x = tf.cast(x, tf.float32)
 
     @tf.function
     def process(x):
         # x = random_size_ratio(x, ratio_min=0.25, ratio_max=1.25)
-        x = randomFlip(tf.expand_dims(x, 0))[0]
-        x = random_rotate(x)
-        x = random_augment(x)
-        x = randomTranslation(tf.expand_dims(x, 0))[0]
+        # x = randomFlip(tf.expand_dims(x, 0))[0]
+        # x = random_rotate(x)
+        x = horizontal_randomFlip(tf.expand_dims(x, 0))[0]
+        x = color_jitter(x)
+        x = color_drop(x)
+
+        # x = randomTranslation(tf.expand_dims(x, 0))[0]
         # x = tfa.image.random_cutout(tf.expand_dims(x, 0), (
+        #
         #     tf.random.uniform([], 12, 36, dtype=tf.int32), tf.random.uniform([], 12, 36, dtype=tf.int32)))[0]
 
         return x
 
+    # x_contra = tf.case([(tf.less(chance, tf.cast(p * 100, dtype=tf.int32)),
+    #                      lambda: process(x))
+    #                        , ((tf.greater(chance, tf.cast((1 - p) * 100, dtype=tf.int32)),
+    #                            lambda: patch_augment(x)))
+    #                     ],
+    #                    default=lambda: x)
+
     x_contra = tf.case([(tf.less(chance, tf.cast(p * 100, dtype=tf.int32)),
-                         lambda: process(x))
-                           , ((tf.greater(chance, tf.cast((1 - p) * 100, dtype=tf.int32)),
-                               lambda: patch_augment(x)))
-                        ],
+                         lambda: process(x))],
                        default=lambda: x)
 
     return x_contra
@@ -389,8 +446,18 @@ def jigsaw_with_augment(image, nums_jig=3):
 #
 # image = tf.io.read_file("/data/giraffe/0_FSL/FSL/test.jpg")  # 根据路径读取 图片
 # image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
-# # image = tf.image.resize(image, [92, 92])
-# # image = tf.image.central_crop(image, 84 / 92.)
+# cv2.imshow("test", image.numpy().astype(np.uint8)[..., ::-1])
+# crops = regular_crop(image, k=3)
+# for index, sub in enumerate(crops):
+#     cv2.imshow("{}_image".format(index), sub.numpy().astype(np.uint8)[..., ::-1])
+#     cv2.waitKey(1)
+# cv2.waitKey(0)
+# crops = tf.reduce_mean(crops, -4)
+# cv2.imshow("crops", crops.numpy().astype(np.uint8)[..., ::-1])
+#
+# cv2.waitKey(0)
+# image = tf.image.resize(image, [92, 92])
+# image = tf.image.central_crop(image, 84 / 92.)
 # image = tf.expand_dims(image, 0)
 # image = tf.cast(image, tf.float32)
 #

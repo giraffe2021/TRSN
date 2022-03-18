@@ -82,28 +82,43 @@ class WarmUpStep(keras.optimizers.schedules.LearningRateSchedule):
 
 WEIGHT_DECAY = 0.0005
 
+model_name = os.path.basename(__file__).split(".")[0]
 
-class TRSN(tf.keras.Model):
-    def __init__(self, imageshape=(84, 84, 3), num_class=64):
-        super(TRSN, self).__init__(name="TRSN")
+
+class FSLModel(tf.keras.Model):
+    def __init__(self, imageshape=(84, 84, 3), num_class=64, name=model_name):
+        super(FSLModel, self).__init__(name=name)
 
         self.num_class = num_class
         self.encoder = Backbone("resnet_12", input_shape=imageshape, pooling=None, use_bias=False).get_model()
         self.encoder.build([None, *imageshape])
-        index = 0
         feature_size_h, feature_size_w, feature_dim = [*self.encoder.output.shape[1:]]
+        self.gap = tf.keras.layers.GlobalAveragePooling2D(name="gap")
+        self.gap.build([None, feature_size_h, feature_size_w, feature_dim])
 
-        self.attention = Sequential([layers.Conv2D(128,
-                                                   kernel_size=(3, 3),
-                                                   strides=(1, 1),
-                                                   padding="same",
-                                                   use_bias=False,
-                                                   kernel_initializer='he_normal',
-                                                   kernel_regularizer=tf.keras.regularizers.l2(
-                                                       WEIGHT_DECAY),
-                                                   name="attention_{}".format(index)),
-                                     layers.BatchNormalization()])
-        self.attention.build([None, feature_size_h, feature_size_w, feature_dim])
+        self.last_max_pooling = tf.keras.layers.MaxPool2D(padding="same", name="last_max_pooling")
+        self.last_max_pooling.build([None, feature_size_h, feature_size_w, feature_dim])
+        self.clc = tf.keras.layers.Dense(self.num_class,
+                                         kernel_regularizer=tf.keras.regularizers.l2(WEIGHT_DECAY),
+                                         name="clc")
+        self.clc.build([None, feature_dim])
+
+        self.clc_hinted = tf.keras.layers.Dense(self.num_class,
+                                                kernel_regularizer=tf.keras.regularizers.l2(WEIGHT_DECAY),
+                                                name="clc_hinted")
+        self.clc_hinted.build([None, feature_dim])
+
+        self.rotation_head = tf.keras.layers.Dense(1,
+                                                   activation="relu",
+                                                   kernel_regularizer=tf.keras.regularizers.l2(WEIGHT_DECAY),
+                                                   name="rotation_head")
+        self.rotation_head.build([None, feature_dim])
+
+        self.ratio_head = tf.keras.layers.Dense(1,
+                                                activation="relu",
+                                                kernel_regularizer=tf.keras.regularizers.l2(WEIGHT_DECAY),
+                                                name="ratio_head")
+        self.ratio_head.build([None, feature_dim * 2])
 
         self.self_attention_referenced_conv = Sequential([layers.Conv2D(64,
                                                                         kernel_size=(3, 3),
@@ -128,105 +143,45 @@ class TRSN(tf.keras.Model):
                                                           layers.Activation("sigmoid")
                                                           ],
                                                          name="self_attention_referenced_conv")
-        self.self_attention_referenced_conv.build([None, feature_size_h, feature_size_w, feature_dim * 2])
+        self.self_attention_referenced_conv.build([None, feature_size_h, feature_size_w, feature_dim])
 
-        self.class_special_pos = Sequential([layers.Conv2D(64,
-                                                           kernel_size=(1, 1),
-                                                           strides=(1, 1),
-                                                           padding="same",
-                                                           kernel_initializer='he_normal',
-                                                           kernel_regularizer=tf.keras.regularizers.l2(
-                                                               WEIGHT_DECAY),
-                                                           name="class_special_pos_{}".format(
-                                                               0)),
-                                             layers.BatchNormalization(),
-                                             layers.LeakyReLU(alpha=0.2),
-                                             layers.Conv2D(self.num_class,
-                                                           kernel_size=(1, 1),
-                                                           strides=(1, 1),
-                                                           padding="same",
-                                                           kernel_initializer='he_normal',
-                                                           kernel_regularizer=tf.keras.regularizers.l2(WEIGHT_DECAY),
-                                                           name="pix_conv_pos_{}".format(index)),
-                                             layers.BatchNormalization(),
-                                             layers.LeakyReLU(alpha=0.2)], name="class_special_positive")
-        self.class_special_pos.build([None, feature_size_h, feature_size_w, feature_dim])
-        self.class_special_neg_local = Sequential([layers.Conv2D(1,
-                                                                 kernel_size=(1, 1),
-                                                                 padding="same",
-                                                                 kernel_regularizer=tf.keras.regularizers.l2(
-                                                                     WEIGHT_DECAY),
-                                                                 name="pix_conv_neg_{}".format(index)),
-                                                   layers.BatchNormalization(),
-                                                   layers.LeakyReLU(alpha=0.2)], name="class_special_negative_local")
-        self.class_special_neg_mid = Sequential([layers.Conv2D(1,
-                                                               kernel_size=(3, 3),
-                                                               dilation_rate=(2, 2),
-                                                               padding="same",
-                                                               kernel_regularizer=tf.keras.regularizers.l2(
-                                                                   WEIGHT_DECAY),
-                                                               name="pix_conv_neg_{}".format(index)),
-                                                 layers.BatchNormalization(),
-                                                 layers.LeakyReLU(alpha=0.2)], name="class_special_negative_mid")
-        self.class_special_neg_global = Sequential([layers.Conv2D(1,
-                                                                  kernel_size=(3, 3),
-                                                                  dilation_rate=(3, 3),
-                                                                  padding="same",
-                                                                  kernel_regularizer=tf.keras.regularizers.l2(
-                                                                      WEIGHT_DECAY),
-                                                                  name="pix_conv_neg_{}".format(index)),
-                                                    layers.BatchNormalization(),
-                                                    layers.LeakyReLU(alpha=0.2)], name="class_special_negative_global")
-        self.class_special_neg_local.build([None, feature_size_h, feature_size_w, feature_dim])
-        self.class_special_neg_mid.build([None, feature_size_h, feature_size_w, feature_dim])
-        self.class_special_neg_global.build([None, feature_size_h, feature_size_w, feature_dim])
+        self.build([None, *imageshape])
+        self.acc = tf.keras.metrics.CategoricalAccuracy(name="acc")
+        self.loss_metric = tf.keras.metrics.Mean(name="clc_loss")
+        self.rotation_metric = tf.keras.metrics.Mean(name="rotate_loss")
+        self.ratio_metric = tf.keras.metrics.Mean(name="ratio_loss")
+        self.hinted_loss_metric = tf.keras.metrics.Mean(name="hinted_clc_loss")
+        self.er_loss_metric = tf.keras.metrics.Mean(name="er_loss")
+        self.cluster_loss_metric = tf.keras.metrics.Mean(name="cluster_loss")
 
-        self.last_max_pooling = tf.keras.layers.MaxPool2D(padding="same", name="last_max_pooling")
-        self.last_max_pooling.build([None, feature_size_h, feature_size_w, feature_dim])
-        self.gap = tf.keras.layers.GlobalAveragePooling2D(name="gap")
-        self.gap.build([None, feature_size_h, feature_size_w, feature_dim])
-        self.bn = tf.keras.layers.BatchNormalization()
-        self.bn.build([None, self.num_class])
+        self.query_loss_metric = tf.keras.metrics.Mean("query_loss")
+        self.mean_query_acc = tf.keras.metrics.Mean(name="mq_acc")
 
-        self.clc = tf.keras.layers.Dense(self.num_class,
-                                         kernel_regularizer=tf.keras.regularizers.l2(WEIGHT_DECAY),
-                                         name="clc")
-        self.clc.build([None, feature_dim])
+        self.mean_query_acc_base = tf.keras.metrics.Mean(name="mq_acc_base")
 
         self.build([None, *imageshape])
         self.summary()
-        self.acc = tf.keras.metrics.CategoricalAccuracy(name="acc")
-        self.loss_metric = tf.keras.metrics.Mean(name="loss")
-        self.salient_loss_metric = tf.keras.metrics.Mean(name="salient_loss")
-
-        self.query_loss_metric = tf.keras.metrics.Mean("query_loss")
-        self.mean_query_acc = tf.keras.metrics.Mean(name="mean_query_acc")
-        self.mean_query_acc_attention = tf.keras.metrics.Mean(name="mean_query_acc_attention")
-        self.query_loss_metric_attenion = tf.keras.metrics.Mean("query_loss_metric_attenion")
-
-        self.mean_query_acc_base = tf.keras.metrics.Mean(name="mean_query_acc_base")
-        self.query_loss_metric_base = tf.keras.metrics.Mean("query_loss_metric_base")
-
-    @tf.function
-    def get_max(self, x):
-        batch, h, w, c = tf.unstack(tf.shape(x))
-        batch_index = tf.reshape(tf.range(batch), [batch, 1, 1])
-        batch_index = tf.broadcast_to(batch_index, [batch, c, 1])
-
-        x = tf.reshape(x, [batch, h * w, c])
-        indices_max = tf.argmax(x, axis=1, output_type=tf.int32)
-
-        indices_max = tf.stack([indices_max // w, indices_max % w], -1)
-        indices_max = tf.concat([batch_index, indices_max], -1)
-
-        indices_min = tf.argmin(x, axis=1, output_type=tf.int32)
-        indices_min = tf.stack([indices_min // w, indices_min % w], -1)
-        indices_min = tf.concat([batch_index, indices_min], -1)
-
-        return indices_max, indices_min
 
     def call(self, inputs, training=None):
         return None
+
+    def reset_metrics(self):
+        # Resets the state of all the metrics in the model.
+        for m in self.metrics:
+            m.reset_states()
+
+        self.acc.reset_states()
+        self.loss_metric.reset_states()
+        self.hinted_loss_metric.reset_states()
+        self.rotation_metric.reset_states()
+        self.ratio_metric.reset_states()
+        self.er_loss_metric.reset_states()
+        self.cluster_loss_metric.reset_states()
+
+        self.query_loss_metric.reset_states()
+        self.mean_query_acc.reset_states()
+
+        self.mean_query_acc_base.reset_states()
 
     def get_local_feature(self, features, training=None):
         _, f_h, f_w, f_c = tf.unstack(tf.shape(features))
@@ -411,296 +366,121 @@ class TRSN(tf.keras.Model):
         total_loss = loss_clc + contrastive_neg_loss
         return total_loss, salient_loss
 
-    def reset_metrics(self):
-        # Resets the state of all the metrics in the model.
-        for m in self.metrics:
-            m.reset_states()
+    def baseline_task_train_step(self, data, training=True):
+        support, query = data
+        support_image, _, support_global_label = support
+        query_image, _, query_global_label = query
 
-        self.acc.reset_states()
-        self.loss_metric.reset_states()
-        self.query_loss_metric.reset_states()
-        self.mean_query_acc.reset_states()
-        self.mean_query_acc_attention.reset_states()
-        self.query_loss_metric_attenion.reset_states()
-        self.mean_query_acc_base.reset_states()
-        self.query_loss_metric_base.reset_states()
-        self.salient_loss_metric.reset_states()
-        #
-        # self.offset_loss_metric.reset_states()
-        # self.contras_loss_metric.reset_states()
-        # self.acc_special.reset_states()
-        # self.acc_common.reset_states()
-        # self.loss_common_metric.reset_states()
-        # self.loss_special_metric.reset_states()
-        #
-        # self.d_loss_metric.reset_states()
-        # self.g_loss_metric.reset_states()
+        image_shape = tf.unstack(tf.shape(support_image)[-3:])
+        global_dim_shape = tf.shape(support_global_label)[-1]
 
-    def random_enrode(self, x):
-        x = tf.reshape(x, tf.concat([[-1], tf.shape(x)[-3:]], 0))
-        batch, h, w, c = tf.unstack(tf.shape(x))
-        for _ in range(1):
-            features = self.encoder(x, training=False)
+        batch = tf.shape(support_image)[0]
+        ways = tf.shape(support_image)[1]
+        shots = tf.shape(support_image)[2]
+        query_shots = tf.shape(query_image)[2]
 
-            self_attention = self.self_attention_referenced_conv(features, training=False)
-            self_attention = tf.image.resize(self_attention, [h, w])
-            bg = x * (1. - self_attention)
-            bg_mean = tf.reduce_mean(bg, [1, 2], keepdims=True)
-            ratio = 0.
-            bg_mean = tf.broadcast_to(bg_mean, tf.shape(x)) * self_attention
-            keep_ratio = 0.005
-            x = x * keep_ratio + (1. - keep_ratio) * tf.clip_by_value(
-                x * (1. - self_attention) + x * ratio + bg_mean * (1 - ratio), 0., 1.)
+        support_x = tf.reshape(support_image, [-1, *image_shape])
+        query_x = tf.reshape(query_image, [-1, *image_shape])
 
-        return x
+        support_global_label = tf.reshape(support_global_label, [-1, global_dim_shape])
+        query_global_label = tf.reshape(query_global_label, [-1, global_dim_shape])
+
+        y = tf.concat([support_global_label, query_global_label], 0)
+        support_logits = self.gap(self.encoder(support_x, training=training))
+        query_logits = self.gap(self.encoder(query_x, training=training))
+        logits = tf.concat([support_logits, query_logits], 0)
+        pred = self.clc(logits)
+        loss_clc = tf.reduce_mean(
+            tf.keras.losses.categorical_crossentropy(y, pred, from_logits=True))
+        support_logits = tf.reshape(support_logits, [batch, ways, shots, -1])
+        query_logits = tf.reshape(query_logits, [batch, ways, query_shots, -1])
+        return loss_clc, support_logits, query_logits
 
     # @tf.function
     def train_step_normal(self, data):
-        support, query = data
+        x, y = data
+        image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2 = x
+        y, rotate_label_1, rotate_label_2, resize_label_1, resize_label_2 = y
+        training = True
+        batch = tf.shape(image)[0]
+
+        x = tf.concat([image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2], 0)
+        y_all = tf.concat([y, y, y, y, y], 0)
         with tf.GradientTape() as tape:
-            total_loss, salient_loss = self.meta_train_step(support, query, True)
-        trainable_vars = self.encoder.trainable_weights \
-                         + self.attention.trainable_weights \
-                         + self.class_special_pos.trainable_weights \
-                         + self.class_special_neg_local.trainable_weights \
-                         + self.class_special_neg_mid.trainable_weights \
-                         + self.class_special_neg_global.trainable_weights \
-                         + self.clc.trainable_weights \
+            features = self.encoder(x, training=training)
+            f_b, f_h, f_w, f_c = tf.unstack(tf.shape(features))
+            logits = self.gap(self.last_max_pooling(features))
+            pred = self.clc(logits, training=training)
+
+            logits_base, logits_rotated_1, logits_rotated_2, logits_resized_1, logits_resized_2 \
+                = tf.split(logits, [batch, batch, batch, batch, batch], 0)
+            clc_loss = tf.reduce_mean(tf.keras.losses.categorical_crossentropy(y_all, pred, from_logits=True))
+
+            all_protos = tf.reduce_mean(logits, 0)
+            all_protos = tf.reshape(all_protos, [1, 1, f_c])
+            reshaped_features = tf.reshape(features, [f_b, f_h * f_w, f_c])
+            similarity_map = tf.reduce_sum(
+                tf.nn.l2_normalize(reshaped_features, -1) * tf.nn.l2_normalize(all_protos, -1), -1)
+            similarity_map = tf.reshape(similarity_map, [f_b, f_h, f_w, 1])
+            hinted_features = features + similarity_map
+            hinted_attention = self.self_attention_referenced_conv(hinted_features, training=training)
+
+            hinted_logits = features * hinted_attention
+            hinted_logits = tf.math.divide_no_nan(tf.reduce_sum(hinted_logits, [1, 2]),
+                                                  tf.reduce_sum(hinted_attention, [1, 2]))
+            hinted_pred = self.clc_hinted(hinted_logits, training=training)
+            hinted_clc_loss = tf.reduce_mean(
+                tf.keras.losses.categorical_crossentropy(y_all, hinted_pred, from_logits=True))
+
+            rotate_pred = self.rotation_head(tf.concat([logits_base, logits_rotated_1, logits_rotated_2], 0),
+                                             training=training)
+
+            rotated_label = tf.concat([tf.zeros_like(rotate_label_1),
+                                       rotate_label_1,
+                                       rotate_label_2], 0)
+            # rotated_label = tf.squeeze(rotated_label, 1)
+            rotate_loss = tf.reduce_mean(
+                tf.keras.losses.mse(rotated_label, rotate_pred))
+
+            size_logits_1 = tf.concat([logits_base, logits_resized_1], -1)
+            size_logits_2 = tf.concat([logits_base, logits_resized_2], -1)
+            size_logits_self = tf.concat([logits_base, logits_base], -1)
+
+            size_logits = tf.concat([size_logits_1,
+                                     size_logits_2,
+                                     size_logits_self], 0)
+            size_pred = self.ratio_head(size_logits)
+
+            size_label = tf.concat([resize_label_1,
+                                    resize_label_2,
+                                    tf.ones_like(resize_label_1)], 0)
+            # #
+            ratio_loss = tf.reduce_mean(
+                tf.keras.losses.mse(size_pred, size_label))
+
+        trainable_vars = self.encoder.trainable_weights + self.clc.trainable_weights \
+                         + self.rotation_head.trainable_weights \
+                         + self.ratio_head.trainable_weights \
+                         + self.clc_hinted.trainable_weights \
                          + self.self_attention_referenced_conv.trainable_weights
-        grads = tape.gradient([total_loss, salient_loss], trainable_vars)
+        grads = tape.gradient([clc_loss, hinted_clc_loss, rotate_loss, ratio_loss], trainable_vars)
+        # grads = tape.gradient([clc_loss], trainable_vars)
         self.optimizer.apply_gradients(zip(grads, trainable_vars))
 
-        self.loss_metric.update_state(total_loss)
-        self.salient_loss_metric.update_state(salient_loss)
+        self.loss_metric.update_state(clc_loss)
+        self.hinted_loss_metric.update_state(hinted_clc_loss)
+        self.rotation_metric.update_state(rotate_loss)
+        self.ratio_metric.update_state(ratio_loss)
+        # self.er_loss_metric.update_state(e_loss)
 
         logs = {
             self.loss_metric.name: self.loss_metric.result(),
-            self.salient_loss_metric.name: self.salient_loss_metric.result(),
+            self.hinted_loss_metric.name: self.hinted_loss_metric.result(),
+            self.rotation_metric.name: self.rotation_metric.result(),
+            self.ratio_metric.name: self.ratio_metric.result(),
+            # self.er_loss_metric.name: self.er_loss_metric.result(),
         }
 
-        return logs
-
-    def random_sample_support(self, s, s_label):
-        b, w, k, d = tf.unstack(tf.shape(s))
-        begin_end = tf.random.shuffle(tf.range(k + 1))[:2]
-        begin, end = tf.reduce_min(begin_end), tf.reduce_max(begin_end)
-        # tf.print(begin, end)
-        sub_s = s[..., begin:end, :]
-        sub_label = s_label[..., begin:end, :]
-        mean_s = tf.reduce_mean(sub_s, 2)
-        mean_s_label = tf.reduce_mean(sub_label, 2)
-        return mean_s, mean_s_label
-
-    def train_step_meta_(self, data):
-        support, query = data
-        support_image, support_label, _ = support
-        query_image, query_label, _ = query
-
-        batch = tf.shape(support_image)[0]
-        ways = tf.shape(support_image)[1]
-        shots = tf.shape(support_image)[2]
-        query_shots = tf.shape(query_image)[2]
-
-        support_image = tf.reshape(support_image, tf.concat([[-1], tf.shape(support_image)[-3:]], 0))
-
-        training = True
-
-        with tf.GradientTape() as tape:
-            support_features = self.encoder(support_image, training=training)
-            _, f_h, f_w, f_c = tf.unstack(tf.shape(support_features))
-            support_logits = self.gap(self.last_max_pooling(support_features))
-            support_logits = tf.nn.l2_normalize(support_logits, -1)
-
-            support_logits_merge = tf.reshape(support_logits,
-                                              [batch, ways * shots, tf.shape(support_logits)[-1]])
-            support_logits_merge = tf.nn.l2_normalize(support_logits_merge, -1)
-            support_logits_merge = tf.reduce_mean(support_logits_merge, 1)
-            support_logits_merge = tf.reshape(support_logits_merge, [batch, 1, 1, 1, f_c])
-            support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * shots, f_h, f_w, f_c])
-            support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
-            merge_feature_support = tf.concat([support_features, support_logits_broad], -1)
-
-            support_self_attention = self.self_attention_referenced_conv(merge_feature_support, training=training)
-
-            support_features = tf.nn.l2_normalize(support_features, -1)
-            support_logits_attention = support_features * support_self_attention
-            support_logits_attention = tf.math.divide_no_nan(tf.reduce_sum(support_logits_attention, [1, 2]),
-                                                             tf.reduce_sum(support_self_attention, [1, 2]))
-            support_logits_attention = tf.nn.l2_normalize(support_logits_attention, -1)
-            support_logits_fusion = tf.concat([support_logits, support_logits_attention], -1)
-
-            support_logits_fusion = tf.reshape(support_logits_fusion,
-                                               [batch, ways, shots, tf.shape(support_logits_fusion)[-1]])
-            support_logits_fusion = tf.nn.l2_normalize(support_logits_fusion, -1)
-
-            support_mean_fusion, support_mean_label = self.random_sample_support(support_logits_fusion, support_label)
-
-            new_shape = tf.concat([[-1], tf.shape(query_image)[-3:]], axis=0)
-            query_image = tf.reshape(query_image, new_shape)
-
-            query_features = self.encoder(query_image, training=training)
-            query_logits = self.gap(self.last_max_pooling(query_features))
-            query_logits = tf.nn.l2_normalize(query_logits, -1)
-            support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * query_shots, f_h, f_w, f_c])
-            support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
-            merge_feature_query = tf.concat([query_features, support_logits_broad], -1)
-            query_self_attention = self.self_attention_referenced_conv(merge_feature_query, training=training)
-            query_features = tf.nn.l2_normalize(query_features, -1)
-            query_logits_attention = query_features * query_self_attention
-            query_logits_attention = tf.math.divide_no_nan(tf.reduce_sum(query_logits_attention, [1, 2]),
-                                                           tf.reduce_sum(query_self_attention, [1, 2]))
-            query_logits_attention = tf.nn.l2_normalize(query_logits_attention, -1)
-            query_logits_fusion = tf.concat([query_logits, query_logits_attention], -1)
-            query_logits_fusion = tf.reshape(query_logits_fusion,
-                                             [batch, ways, query_shots, tf.shape(query_logits_fusion)[-1]])
-            logits_dim = tf.shape(support_logits_fusion)[-1]
-            dim_shape = tf.shape(query_label)[-1]
-
-            support_mean_fusion = tf.reshape(support_mean_fusion, [batch, ways, logits_dim])
-            support_mean_fusion = tf.nn.l2_normalize(support_mean_fusion, -1)
-
-            support_logits_fusion = tf.reshape(support_logits_fusion,
-                                               [batch, -1, tf.shape(support_logits_fusion)[-1]])
-
-            query_logits_fusion = tf.reshape(query_logits_fusion,
-                                             [batch, -1, tf.shape(query_logits_fusion)[-1]])
-
-            score_suport = tf.linalg.matmul(tf.nn.l2_normalize(support_mean_label, axis=-1),
-                                            tf.nn.l2_normalize(tf.reshape(support_label, [batch, -1, dim_shape]),
-                                                               axis=-1),
-                                            transpose_b=True)
-            score_query = tf.linalg.matmul(tf.nn.l2_normalize(support_mean_label, axis=-1),
-                                           tf.nn.l2_normalize(tf.reshape(query_label, [batch, -1, dim_shape]), axis=-1),
-                                           transpose_b=True)
-
-            pos_index_support = tf.cast(tf.greater(score_suport, 0.7), tf.float32)
-            pos_index_query = tf.cast(tf.greater(score_query, 0.7), tf.float32)
-            neg_index_support = tf.cast(tf.less(score_suport, 0.5), tf.float32)
-            neg_index_query = tf.cast(tf.less(score_query, 0.5), tf.float32)
-            all_samples = tf.concat(
-                [support_logits_fusion, query_logits_fusion],
-                1)
-
-            pos_mask = tf.concat(
-                [pos_index_support, pos_index_query],
-                2)
-            neg_mask = tf.concat(
-                [neg_index_support, neg_index_query],
-                2)
-            distances = 1. - tf.linalg.matmul(support_mean_fusion, all_samples, transpose_b=True)
-            pos_distance = tf.math.divide_no_nan(
-                tf.reduce_sum(distances * pos_mask, -1),
-                tf.reduce_sum(pos_mask, -1))
-            neg_distance = tf.math.divide_no_nan(
-                tf.reduce_sum(distances * neg_mask, -1),
-                tf.reduce_sum(neg_mask, -1))
-            tripel_loss = tf.maximum(0., 1.0 + pos_distance - neg_distance)
-            meta_contrast_loss = tf.reduce_mean(tripel_loss)
-            avg_loss = meta_contrast_loss
-
-        trainable_vars = self.encoder.trainable_weights \
-                         + self.self_attention_referenced_conv.trainable_weights
-        grads = tape.gradient([avg_loss], trainable_vars)
-        self.optimizer.apply_gradients(zip(grads, trainable_vars))
-
-        self.query_loss_metric.update_state(avg_loss)
-        logs = {
-            self.query_loss_metric.name: self.query_loss_metric.result(),
-        }
-        return logs
-
-    def train_step_meta(self, data):
-        support, query = data
-        support_image, support_label, _ = support
-        query_image, query_label, _ = query
-
-        batch = tf.shape(support_image)[0]
-        ways = tf.shape(support_image)[1]
-        shots = tf.shape(support_image)[2]
-        query_shots = tf.shape(query_image)[2]
-
-        support_image = tf.reshape(support_image, tf.concat([[-1], tf.shape(support_image)[-3:]], 0))
-
-        training = True
-
-        with tf.GradientTape() as tape:
-            support_features = self.encoder(support_image, training=training)
-            _, f_h, f_w, f_c = tf.unstack(tf.shape(support_features))
-            support_logits = self.gap(self.last_max_pooling(support_features))
-            support_logits = tf.nn.l2_normalize(support_logits, -1)
-
-            support_logits_merge = tf.reshape(support_logits,
-                                              [batch, ways * shots, tf.shape(support_logits)[-1]])
-            support_logits_merge = tf.nn.l2_normalize(support_logits_merge, -1)
-            support_logits_merge = tf.reduce_mean(support_logits_merge, 1)
-            support_logits_merge = tf.reshape(support_logits_merge, [batch, 1, 1, 1, f_c])
-            support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * shots, f_h, f_w, f_c])
-            support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
-            merge_feature_support = tf.concat([support_features, support_logits_broad], -1)
-
-            support_self_attention = self.self_attention_referenced_conv(merge_feature_support, training=training)
-
-            support_features = tf.nn.l2_normalize(support_features, -1)
-            support_logits_attention = support_features * support_self_attention
-            support_logits_attention = tf.math.divide_no_nan(tf.reduce_sum(support_logits_attention, [1, 2]),
-                                                             tf.reduce_sum(support_self_attention, [1, 2]))
-            support_logits_attention = tf.nn.l2_normalize(support_logits_attention, -1)
-            support_logits_fusion = tf.concat([support_logits, support_logits_attention], -1)
-
-            support_logits_fusion = tf.reshape(support_logits_fusion,
-                                               [batch, ways, shots, tf.shape(support_logits_fusion)[-1]])
-            support_logits_fusion = tf.nn.l2_normalize(support_logits_fusion, -1)
-
-            support_mean_fusion, support_mean_label = self.random_sample_support(support_logits_fusion, support_label)
-
-            new_shape = tf.concat([[-1], tf.shape(query_image)[-3:]], axis=0)
-            query_image = tf.reshape(query_image, new_shape)
-
-            query_features = self.encoder(query_image, training=training)
-            query_logits = self.gap(self.last_max_pooling(query_features))
-            query_logits = tf.nn.l2_normalize(query_logits, -1)
-            support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * query_shots, f_h, f_w, f_c])
-            support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
-            merge_feature_query = tf.concat([query_features, support_logits_broad], -1)
-            query_self_attention = self.self_attention_referenced_conv(merge_feature_query, training=training)
-            query_features = tf.nn.l2_normalize(query_features, -1)
-            query_logits_attention = query_features * query_self_attention
-            query_logits_attention = tf.math.divide_no_nan(tf.reduce_sum(query_logits_attention, [1, 2]),
-                                                           tf.reduce_sum(query_self_attention, [1, 2]))
-            query_logits_attention = tf.nn.l2_normalize(query_logits_attention, -1)
-            query_logits_fusion = tf.concat([query_logits, query_logits_attention], -1)
-            query_logits_fusion = tf.reshape(query_logits_fusion,
-                                             [batch, ways, query_shots, tf.shape(query_logits_fusion)[-1]])
-            logits_dim = tf.shape(support_logits_fusion)[-1]
-            dim_shape = tf.shape(query_label)[-1]
-
-            support_mean_fusion = tf.reshape(support_mean_fusion, [batch, ways, logits_dim])
-            support_mean_fusion = tf.nn.l2_normalize(support_mean_fusion, -1)
-
-            query_logits_fusion = tf.reshape(query_logits_fusion,
-                                             [batch, -1, tf.shape(query_logits_fusion)[-1]])
-
-            query_logits_fusion = tf.nn.l2_normalize(query_logits_fusion, -1)
-            sim = tf.linalg.matmul(query_logits_fusion, support_mean_fusion, transpose_b=True)
-
-            sim = tf.reshape(sim, [batch, ways, query_shots, -1])
-            sim = tf.nn.softmax(sim * 20, -1)
-            meta_contrast_loss = tf.keras.losses.categorical_crossentropy(
-                tf.reshape(query_label, [-1, tf.shape(query_label)[-1]]),
-                tf.reshape(sim, [-1, tf.shape(sim)[-1]]))
-            meta_contrast_loss = tf.reduce_mean(meta_contrast_loss)
-
-            avg_loss = meta_contrast_loss
-
-        trainable_vars = self.encoder.trainable_weights \
-                         + self.self_attention_referenced_conv.trainable_weights
-        grads = tape.gradient([avg_loss], trainable_vars)
-        self.optimizer.apply_gradients(zip(grads, trainable_vars))
-
-        self.query_loss_metric.update_state(avg_loss)
-        logs = {
-            self.query_loss_metric.name: self.query_loss_metric.result(),
-        }
         return logs
 
     def run(self, lr=0.001, weights=None, ways=5, shots=5, test_shots=15,
@@ -710,46 +490,31 @@ class TRSN(tf.keras.Model):
 
         dataloader = DataLoader(data_dir_path=data_dir_path)
 
-        meta_test_ds, meta_test_name_projector = dataloader.get_dataset(phase='test', way_num=ways, shot_num=shots,
-                                                                        episode_test_sample_num=test_shots,
-                                                                        episode_num=600,
-                                                                        batch=4,
-                                                                        augment=False)
-        ways = 5
-        shots = 5
-        train_test_num = 6
-        train_batch = 4
-        episode_num = 1200
-        steps_per_epoch = episode_num // train_batch
-        train_epoch = 20
-        mix_up = True
-        augment = True
-        total_epoch = 50
-        warm_up_steps = steps_per_epoch * 3
-        meta_train_ds, meta_train_name_projector = dataloader.get_dataset_V2(phase='train', way_num=ways,
-                                                                             shot_num=shots,
-                                                                             episode_test_sample_num=train_test_num,
-                                                                             episode_num=episode_num,
-                                                                             batch=train_batch,
-                                                                             augment=augment,
-                                                                             mix_up=mix_up,
-                                                                             epochs=train_epoch)
+        meta_test_ds, meta_test_name_projector = dataloader.get_dataset_V3(phase='test', way_num=ways, shot_num=shots,
+                                                                           episode_test_sample_num=test_shots,
+                                                                           episode_num=600,
+                                                                           batch=4,
+                                                                           augment=False)
+
+        meta_train_ds, steps_per_epoch = dataloader.get_all_dataset(phase='train', batch=32,
+                                                                    augment=True, contrastive=True)
+        total_epoch = 600
         scheduled_lrs = WarmUpStep(
             learning_rate_base=lr,
             warmup_learning_rate=0.0,
-            warmup_steps=warm_up_steps,
+            warmup_steps=steps_per_epoch * 3,
         )
+
         # scheduled_lrs = WarmUpCosine(
-        #     learning_rate_base=lr,
+        #     learning_rate_base=0.001,
         #     total_steps=total_epoch * steps_per_epoch,
-        #     warmup_learning_rate=0.0,
+        #     warmup_learning_rate=0.00001,
         #     warmup_steps=steps_per_epoch * 3,
         # )
 
         # self.compile(tfa.optimizers.AdamW(learning_rate=scheduled_lrs, weight_decay=WEIGHT_DECAY, beta_1=0.937))
-        # self.compile(tf.optimizers.Adam(scheduled_lrs))
-        # self.compile(tf.keras.optimizers.SGD(scheduled_lrs, momentum=0.9, nesterov=True))
-        self.compile(tf.keras.optimizers.Adam(scheduled_lrs))
+        self.compile(tf.optimizers.Adam(scheduled_lrs))
+        # self.compile(tf.keras.optimizers.SGD(scheduled_lrs, momentum=0.937, nesterov=True))
         self.train_step = self.train_step_normal
 
         self.test_step = self.test_step_meta
@@ -758,8 +523,10 @@ class TRSN(tf.keras.Model):
         # for data in meta_train_ds:
         #     self.train_step(data)
         # for data in meta_test_ds:
-        #     self.test_step_meta(data)
-        monitor_name = "val_mean_query_acc"
+        #     self.test_step(data)
+        # self.test_step(data)
+        monitor_name = "val_mq_acc"
+        monitor_name = "val_mq_acc_base"
         monitor_cmp = "max"
         cur_date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         name = self.name
@@ -791,10 +558,13 @@ class TRSN(tf.keras.Model):
                                                mode=monitor_cmp)
         ]
 
-        self.fit(meta_train_ds.repeat(), epochs=total_epoch,
-                 steps_per_epoch=steps_per_epoch,
+        self.fit(meta_train_ds, epochs=total_epoch,
                  validation_data=meta_test_ds,
                  callbacks=callbacks, initial_epoch=0)
+        # self.fit(meta_train_ds.repeat(), epochs=total_epoch,
+        #          steps_per_epoch=steps_per_epoch,
+        #          validation_data=meta_test_ds,
+        #          callbacks=callbacks, initial_epoch=0)
 
     def fine_tune(self, lr=0.001, weights=None, ways=5, shots=5, test_shots=15,
                   data_dir_path="/data/giraffe/0_FSL/data/mini_imagenet_tools/processed_images_224"):
@@ -817,7 +587,7 @@ class TRSN(tf.keras.Model):
         train_epoch = 20
         mix_up = True
         augment = True
-        total_epoch = 200
+        total_epoch = 100
         meta_train_ds, meta_train_name_projector = dataloader.get_dataset_V2(phase='train', way_num=ways,
                                                                              shot_num=shots,
                                                                              episode_test_sample_num=train_test_num,
@@ -876,11 +646,41 @@ class TRSN(tf.keras.Model):
             checkpoint_save,
             tensorboard_save,
         ]
-        # self.evaluate(meta_test_ds)
+        self.evaluate(meta_test_ds)
         self.fit(meta_train_ds.repeat(), epochs=total_epoch,
                  steps_per_epoch=steps_per_epoch,
                  validation_data=meta_test_ds,
                  callbacks=callbacks, initial_epoch=0)
+
+    @tf.function
+    def get_boundingBox(self, input, thresh=0.5):
+        h, w, _ = input.shape
+        locations = tf.where(tf.greater(input, thresh))
+
+        def process(locations):
+            locations = tf.cast(locations, tf.float32)
+            left_x = tf.minimum(tf.reduce_min(locations[..., 1]), w - 2.)
+            top_y = tf.minimum(tf.reduce_min(locations[..., 0]), h - 2.)
+            right_x = tf.maximum(tf.reduce_max(locations[..., 1]), left_x + 1.)
+            bottom_y = tf.maximum(tf.reduce_max(locations[..., 0]), top_y + 1.)
+            return tf.stack([left_x, top_y, right_x, bottom_y]) / tf.stack([w - 1., h - 1., w - 1., h - 1.])
+
+        out = tf.cond(tf.shape(locations)[0] == 0, lambda: tf.cast([0., 0., 1., 1.], tf.float32),
+                      lambda: process(locations))
+        return out
+
+    @tf.function
+    def get_croped_images(self, input, out_size=[84, 84]):
+        image, box = input
+        h, w, _ = image.shape
+        left_x, top_y, right_x, bottom_y = tf.unstack(box)
+        begin_x = tf.cast(w * left_x, tf.int64)
+        begin_y = tf.cast(h * top_y, tf.int64)
+        end_x = tf.cast(w * right_x, tf.int64)
+        end_y = tf.cast(h * bottom_y, tf.int64)
+        croped_image = image[begin_y:end_y, begin_x:end_x, ...]
+        croped_image = tf.image.resize(croped_image, out_size)
+        return croped_image
 
     def show(self, weights=None, data_dir_path="/data/giraffe/0_FSL/data/mini_imagenet_tools/processed_images_224",
              phase="test"):
@@ -896,7 +696,6 @@ class TRSN(tf.keras.Model):
                                                               mix_up=False,
                                                               batch=1)
 
-        self.train_step = self.train_step_normal
         cv2.namedWindow("image", 1)
         cv2.namedWindow("q_show_image", 1)
         cv2.namedWindow("q_image", 0)
@@ -926,11 +725,12 @@ class TRSN(tf.keras.Model):
                                               [batch, ways * shots, tf.shape(support_logits)[-1]])
             support_logits_merge = tf.nn.l2_normalize(support_logits_merge, -1)
             support_logits_merge = tf.reduce_mean(support_logits_merge, 1)
+            support_logits_merge = tf.nn.l2_normalize(support_logits_merge, -1)
             support_logits_merge = tf.reshape(support_logits_merge, [batch, 1, 1, 1, f_c])
             support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * shots, f_h, f_w, f_c])
             support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
-            merge_feature_support = tf.concat([support_features, support_logits_broad], -1)
-
+            merge_feature_support = tf.reduce_sum(tf.nn.l2_normalize(support_features, -1) *
+                                                  support_logits_broad, -1, keepdims=True) + support_features
             support_self_attention = self.self_attention_referenced_conv(merge_feature_support, training=training)
             support_features = tf.nn.l2_normalize(support_features, -1)
             support_logits_attention = support_features * support_self_attention
@@ -982,7 +782,9 @@ class TRSN(tf.keras.Model):
             support_logits_broad = tf.broadcast_to(support_logits_merge,
                                                    [batch, ways * query_shots, f_h, q_f_w, f_c])
             support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, q_f_w, f_c])
-            merge_feature_query = tf.concat([query_features, support_logits_broad], -1)
+            merge_feature_query = tf.reduce_sum(tf.nn.l2_normalize(query_features, -1) *
+                                                support_logits_broad, -1, keepdims=True) + query_features
+
             query_self_attention = self.self_attention_referenced_conv(merge_feature_query, training=training)
             query_features = tf.nn.l2_normalize(query_features, -1)
             query_logits_attention = query_features * query_self_attention
@@ -1081,38 +883,10 @@ class TRSN(tf.keras.Model):
         support_logits = self.gap(self.last_max_pooling(support_features))
         support_logits = tf.nn.l2_normalize(support_logits, -1)
 
-        support_logits_merge = tf.reshape(support_logits,
-                                          [batch, ways * shots, tf.shape(support_logits)[-1]])
-        support_logits_merge = tf.nn.l2_normalize(support_logits_merge, -1)
-        support_logits_merge = tf.reduce_mean(support_logits_merge, 1)
-        support_logits_merge = tf.reshape(support_logits_merge, [batch, 1, 1, 1, f_c])
-        support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * shots, f_h, f_w, f_c])
-        support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
-        merge_feature_support = tf.concat([support_features, support_logits_broad], -1)
-
-        support_self_attention = self.self_attention_referenced_conv(merge_feature_support, training=training)
-
-        support_features = tf.nn.l2_normalize(support_features, -1)
-        support_logits_attention = support_features * support_self_attention
-        support_logits_attention = tf.math.divide_no_nan(tf.reduce_sum(support_logits_attention, [1, 2]),
-                                                         tf.reduce_sum(support_self_attention, [1, 2]))
-        support_logits_attention = tf.nn.l2_normalize(support_logits_attention, -1)
-        support_logits_fusion = tf.concat([support_logits, support_logits_attention], -1)
-
-        support_logits_fusion = tf.reshape(support_logits_fusion,
-                                           [batch, ways, shots, tf.shape(support_logits_fusion)[-1]])
-        support_logits_fusion = tf.nn.l2_normalize(support_logits_fusion, -1)
-        x_mean = tf.reduce_mean(support_logits_fusion, 2)
-
         support_logits_base = tf.reshape(support_logits,
                                          [batch, ways, shots, tf.shape(support_logits)[-1]])
         support_logits_base = tf.nn.l2_normalize(support_logits_base, -1)
         x_mean_base = tf.reduce_mean(support_logits_base, 2)
-
-        support_logits_attention = tf.reshape(support_logits_attention,
-                                              [batch, ways, shots, tf.shape(support_logits_attention)[-1]])
-        support_logits_attention = tf.nn.l2_normalize(support_logits_attention, -1)
-        x_mean_attention = tf.reduce_mean(support_logits_attention, 2)
 
         new_shape = tf.concat([[-1], tf.shape(query_image)[-3:]], axis=0)
         query_image = tf.reshape(query_image, new_shape)
@@ -1120,56 +894,9 @@ class TRSN(tf.keras.Model):
         query_features = self.encoder(query_image, training=training)
         query_logits = self.gap(self.last_max_pooling(query_features))
         query_logits = tf.nn.l2_normalize(query_logits, -1)
-        support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * query_shots, f_h, f_w, f_c])
-        support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
-        merge_feature_query = tf.concat([query_features, support_logits_broad], -1)
-        query_self_attention = self.self_attention_referenced_conv(merge_feature_query, training=training)
-        query_features = tf.nn.l2_normalize(query_features, -1)
-        query_logits_attention = query_features * query_self_attention
-        query_logits_attention = tf.math.divide_no_nan(tf.reduce_sum(query_logits_attention, [1, 2]),
-                                                       tf.reduce_sum(query_self_attention, [1, 2]))
-        query_logits_attention = tf.nn.l2_normalize(query_logits_attention, -1)
-        query_logits_fusion = tf.concat([query_logits, query_logits_attention], -1)
-
-        logits_dim = tf.shape(support_logits_fusion)[-1]
-        dim_shape = tf.shape(query_label)[-1]
-
-        support_mean = tf.reshape(x_mean, [batch, ways, logits_dim])
-        support_mean = tf.nn.l2_normalize(support_mean, -1)
-        reshape_query_logits = tf.reshape(query_logits_fusion, [batch, ways * query_shots, logits_dim])
-        reshape_query_logits = tf.nn.l2_normalize(reshape_query_logits, -1)
-        dist = tf.linalg.matmul(reshape_query_logits, support_mean, transpose_b=True)
-        query_pred = tf.clip_by_value(dist, 0., 1.)
-
-        loss = tf.losses.binary_crossentropy(tf.reshape(query_label, [batch, -1, dim_shape, 1]),
-                                             tf.expand_dims(query_pred, -1))
-        avg_loss = tf.reduce_mean(loss)
-
-        acc = tf.keras.metrics.categorical_accuracy(tf.reshape(query_label, [batch, -1, dim_shape]), dist)
-        acc = tf.reduce_mean(acc, -1)
-        self.query_loss_metric.update_state(avg_loss)
-        self.mean_query_acc.update_state(acc)
-
-        logits_dim = tf.shape(x_mean_attention)[-1]
-
-        support_mean_attention = tf.reshape(x_mean_attention, [batch, ways, logits_dim])
-        support_mean_attention = tf.nn.l2_normalize(support_mean_attention, -1)
-        reshape_query_logits_attention = tf.reshape(query_logits_attention, [batch, ways * query_shots, logits_dim])
-        reshape_query_logits_attention = tf.nn.l2_normalize(reshape_query_logits_attention, -1)
-        dist_attention = tf.linalg.matmul(reshape_query_logits_attention, support_mean_attention, transpose_b=True)
-        query_pred_attention = tf.clip_by_value(dist_attention, 0., 1.)
-
-        loss_attention = tf.losses.binary_crossentropy(tf.reshape(query_label, [batch, -1, dim_shape, 1]),
-                                                       tf.expand_dims(query_pred_attention, -1))
-        loss_attention = tf.reduce_mean(loss_attention)
-
-        acc_attention = tf.keras.metrics.categorical_accuracy(tf.reshape(query_label, [batch, -1, dim_shape]),
-                                                              dist_attention)
-        acc_attention = tf.reduce_mean(acc_attention, -1)
-        self.mean_query_acc_attention.update_state(acc_attention)
-        self.query_loss_metric_attenion.update_state(loss_attention)
 
         logits_dim = tf.shape(x_mean_base)[-1]
+        dim_shape = tf.shape(query_label)[-1]
 
         support_mean_base = tf.reshape(x_mean_base, [batch, ways, logits_dim])
         support_mean_base = tf.nn.l2_normalize(support_mean_base, -1)
@@ -1187,135 +914,42 @@ class TRSN(tf.keras.Model):
                                                          dist_base)
         acc_base = tf.reduce_mean(acc_base, -1)
         self.mean_query_acc_base.update_state(acc_base)
-        self.query_loss_metric_base.update_state(loss_base)
-
         logs = {
-            self.mean_query_acc.name: self.mean_query_acc.result(),
-            self.mean_query_acc_attention.name: self.mean_query_acc_attention.result(),
             self.mean_query_acc_base.name: self.mean_query_acc_base.result(),
-            self.query_loss_metric.name: self.query_loss_metric.result(),
-            self.query_loss_metric_attenion.name: self.query_loss_metric_attenion.result(),
-            self.query_loss_metric_base.name: self.query_loss_metric_base.result(),
-            "mean_query_acc_current": tf.reduce_mean(acc, -1),
         }
         return logs
 
-    def test(self, weights=None, ways=5, shots=5, episode_num=10000,
-             data_dir_path="/data/giraffe/0_FSL/data/mini_imagenet_tools/processed_images_224"):
-        if weights is not None:
-            self.load_weights(weights, by_name=True, skip_mismatch=True)
 
-        # data_dir_path = "/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224"
-
-        dataloader = MiniImageNetDataLoader_v2(data_dir_path=data_dir_path)
-
-        meta_test_ds, meta_test_name_projector = dataloader.get_dataset(phase='test', way_num=ways, shot_num=shots,
-                                                                        episode_test_sample_num=15,
-                                                                        episode_num=episode_num,
-                                                                        batch=8,
-                                                                        augment=False)
-
-        self.compile(tf.keras.optimizers.Adam(0.0001))
-        self.train_step = self.train_step_normal
-
-        self.test_step = self.test_step_meta
-        self.predict_step = self.test_step_meta
-
-        # for data in meta_test_ds:
-        #     self.test_step(data)
-
-        monitor_name = "val_mean_query_acc"
-        monitor_cmp = "max"
-        save_best_only = True
-        cur_date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        name = self.name
-        log_base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        ckpt_base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        ckpt_base_path = os.path.join(ckpt_base_path, "{}_ckpts/".format(name))
-        print(log_base_path, ckpt_base_path)
-        filepath = os.path.join(ckpt_base_path,
-                                "model_e{}-l {}.h5".format("{epoch:03d}",
-                                                           "{" + "{}:.5f".format(monitor_name) + "}"))
-        os.makedirs(ckpt_base_path, exist_ok=True)
-
-        tensorboard_save = tf.keras.callbacks.TensorBoard(
-            log_dir=os.path.join(log_base_path, '{}_logs/{}'.format(name, cur_date)),
-            profile_batch=0, )
-        checkpoint_save = tf.keras.callbacks.ModelCheckpoint(filepath,
-                                                             verbose=1, monitor=monitor_name,
-                                                             save_best_only=save_best_only,
-                                                             # save_best_only=False,
-                                                             mode=monitor_cmp)
-
-        callbacks = [
-            checkpoint_save,
-            tensorboard_save,
-        ]
-
-        self.reset_states()
-        # out = self.predict(meta_test_ds, verbose=1)
-        # acc = out["mean_query_acc_current"]
-        # acc = acc * 100.
-        # mean = np.mean(acc)
-        # std = np.std(acc)
-        # # #
-        # pm = 1.96 * (std / np.sqrt(len(acc)))
-        # print(mean, std, pm)
-        # pm = st.t.interval(0.95, len(acc) - 1, loc=np.mean(acc), scale=st.sem(acc)) - mean
-        # print(mean, pm)
-        out = self.evaluate(meta_test_ds, return_dict=True)
-
-        # acc = self.predict(meta_test_ds)["mean_query_acc"]
-        # # print(acc)
-        # mean = np.mean(acc)
-        # std = np.std(acc)
-        # #
-        # pm = 1.96 * (std / np.sqrt(len(acc)))
-        # print(mean, std, pm)
-
-
+multi_gpu = True
 seed = 100
 random.seed(seed)
-mirrored_strategy = tf.distribute.MirroredStrategy()
-with mirrored_strategy.scope():
-    model = TRSN(imageshape=(84, 84, 3), num_class=351)
-# model.run(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5")
-# model.fine_tune(lr=0.005)
-# model.run(weights="model_e238-l 0.86049.h5",
-#           data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
-
-model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5",
+if multi_gpu is True:
+    mirrored_strategy = tf.distribute.MirroredStrategy()
+    with mirrored_strategy.scope():
+        model = FSLModel(imageshape=(84, 84, 3), num_class=64)
+else:
+    model = FSLModel(imageshape=(84, 84, 3), num_class=64)
+model.run(weights="/data/giraffe/0_FSL/{}_ckpts/latest.h5".format(model_name))
+model.fine_tune(weights="/data/giraffe/0_FSL/Normal_ckpts/model_e166-l 0.82573.h5",
                 lr=0.005,
                 )
-
-# model.run(weights="model_e335-l 0.86331.h5",
+# model.run(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5")
+# model.run(data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
+# model.run(data_dir_path="/data/giraffe/0_FSL/data/mini_imagenet_tools/processed_images_224")
+# model.run(data_dir_path="/data/giraffe/0_FSL/data/CUB_200_2011/CUB_200_2011/processed_images_224_crop")
+# model.run(weights="/data2/giraffe/0_FSL/TRRN_2_ckpts/model_e001-l 0.82144.h5")
+# model.run(weights="/data/giraffe/0_FSL/{}_ckpts/latest.h5".format(model_name),
 #           data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
-# model.fine_tune(lr=0.005, data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
-# model.fine_tune(weights="model_e335-l 0.86331.h5",
-#                 lr=0.005,
-#                 data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
+# model.run(weights="/data2/giraffe/0_FSL/{}_ckpts/latest.h5".format(model_name))
+# model.test(weights="/data2/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5", shots=5)
+# model.init("/data/giraffe/0_FSL/TRSN_ckpts/model_e526-l 0.84958.h5", phase="train")
+# model.init_and_test("{}.h5".format(model.name), phase="train")
+# random.seed(seed)
+model.show("/data2/giraffe/0_FSL/{}_ckpts/latest.h5".format(model_name), phase="test")
 
-# model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e405-l 0.62236.h5",
-#                 lr=0.005,
-#                 data_dir_path="/data/giraffe/0_FSL/data/FC100")
-
-# model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e187-l 0.90229.h5",
-#                 lr=0.005,
-#                 data_dir_path="/data/giraffe/0_FSL/data/CUB_200_2011/CUB_200_2011/processed_images_224_crop")
-
-# model.run(weights="model_e052-l 0.84416.h5",
-#           data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
-# model.fine_tune(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e015-l 0.83822.h55")
-# model.test(weights="/data2/giraffe/0_FSL/TRSN_ckpts/model_e030-l 0.85144.h5")
-# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e009-l 0.86502.h5",
-#            data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224",shots=1)
-# model.test(weights="/data2/giraffe/0_FSL/TRSN_ckpts/model_e081-l 0.85042.h5", shots=1)
-# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e023-l 0.85064.h5", shots=1)
-# model.test(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e015-l 0.83822.h5")
-# model.show("model_e112-l 0.85147.h5")
-# model.show("/data2/giraffe/0_FSL/TRSN_ckpts/model_e078-l 0.93898.h5",
-#            data_dir_path="/data/giraffe/0_FSL/data/CUB_200_2011/CUB_200_2011/processed_images_224_crop")
-# model.show("/data2/giraffe/0_FSL/TRSN_ckpts/model_e013-l 0.92509.h5")
-# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e491-l 0.84962.h5", shots=1)
-# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e491-l 0.84962.h5", shots=5)
-# model.fine_tune(lr=0.0001, weights=""/data/giraffe/0_FSL/TRSN_ckpts/model_e328-l 0.83613.h5"")
+# model.test(weights="/data/giraffe/0_FSL/{}_ckpts/latest.h5".format(model_name), shots=5, episode_num=600)
+# model.test(weights=None, shots=5, episode_num=600)
+# model.test(weights="/data2/giraffe/0_FSL/{}_ckpts//model_e786-l 0.84222.h5".format(model_name), shots=5,
+#            episode_num=1000)
+# model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e047-l 0.84964.h5", shots=5)
+# model.fine_tune(lr=0.0001, weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e526-l 0.84958.h5")

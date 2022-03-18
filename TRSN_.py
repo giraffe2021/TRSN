@@ -83,9 +83,11 @@ class WarmUpStep(keras.optimizers.schedules.LearningRateSchedule):
 WEIGHT_DECAY = 0.0005
 
 
-class TRSN(tf.keras.Model):
-    def __init__(self, imageshape=(84, 84, 3), num_class=64):
-        super(TRSN, self).__init__(name="TRSN")
+model_name = os.path.basename(__file__).split(".")[0]
+
+class FSLModel(tf.keras.Model):
+    def __init__(self, imageshape=(84, 84, 3), num_class=64,name=model_name):
+        super(FSLModel, self).__init__(name=name)
 
         self.num_class = num_class
         self.encoder = Backbone("resnet_12", input_shape=imageshape, pooling=None, use_bias=False).get_model()
@@ -129,6 +131,12 @@ class TRSN(tf.keras.Model):
                                                           ],
                                                          name="self_attention_referenced_conv")
         self.self_attention_referenced_conv.build([None, feature_size_h, feature_size_w, feature_dim * 2])
+
+        self.vector_attention = tf.keras.layers.Dense(feature_dim * 2,
+                                                      activation="sigmoid",
+                                                      kernel_regularizer=tf.keras.regularizers.l2(WEIGHT_DECAY),
+                                                      name="vector_attention")
+        self.vector_attention.build([None, feature_dim * 2])
 
         self.class_special_pos = Sequential([layers.Conv2D(64,
                                                            kernel_size=(1, 1),
@@ -647,6 +655,9 @@ class TRSN(tf.keras.Model):
             support_logits_attention = tf.nn.l2_normalize(support_logits_attention, -1)
             support_logits_fusion = tf.concat([support_logits, support_logits_attention], -1)
 
+            support_logits_fusion = self.vector_attention(support_logits_fusion,
+                                                          training=training) * support_logits_fusion
+
             support_logits_fusion = tf.reshape(support_logits_fusion,
                                                [batch, ways, shots, tf.shape(support_logits_fusion)[-1]])
             support_logits_fusion = tf.nn.l2_normalize(support_logits_fusion, -1)
@@ -669,6 +680,8 @@ class TRSN(tf.keras.Model):
                                                            tf.reduce_sum(query_self_attention, [1, 2]))
             query_logits_attention = tf.nn.l2_normalize(query_logits_attention, -1)
             query_logits_fusion = tf.concat([query_logits, query_logits_attention], -1)
+
+            query_logits_fusion = self.vector_attention(query_logits_fusion, training=training) * query_logits_fusion
             query_logits_fusion = tf.reshape(query_logits_fusion,
                                              [batch, ways, query_shots, tf.shape(query_logits_fusion)[-1]])
             logits_dim = tf.shape(support_logits_fusion)[-1]
@@ -693,7 +706,8 @@ class TRSN(tf.keras.Model):
             avg_loss = meta_contrast_loss
 
         trainable_vars = self.encoder.trainable_weights \
-                         + self.self_attention_referenced_conv.trainable_weights
+                         + self.self_attention_referenced_conv.trainable_weights \
+                         + self.vector_attention.trainable_weights
         grads = tape.gradient([avg_loss], trainable_vars)
         self.optimizer.apply_gradients(zip(grads, trainable_vars))
 
@@ -938,6 +952,8 @@ class TRSN(tf.keras.Model):
                                                              tf.reduce_sum(support_self_attention, [1, 2]))
             support_logits_attention = tf.nn.l2_normalize(support_logits_attention, -1)
             support_logits_fusion = tf.concat([support_logits, support_logits_attention], -1)
+            support_logits_fusion = self.vector_attention(support_logits_fusion,
+                                                          training=training) * support_logits_fusion
 
             support_logits_fusion = tf.reshape(support_logits_fusion,
                                                [batch, ways, shots, tf.shape(support_logits_fusion)[-1]])
@@ -1098,6 +1114,7 @@ class TRSN(tf.keras.Model):
                                                          tf.reduce_sum(support_self_attention, [1, 2]))
         support_logits_attention = tf.nn.l2_normalize(support_logits_attention, -1)
         support_logits_fusion = tf.concat([support_logits, support_logits_attention], -1)
+        support_logits_fusion = self.vector_attention(support_logits_fusion, training=training) * support_logits_fusion
 
         support_logits_fusion = tf.reshape(support_logits_fusion,
                                            [batch, ways, shots, tf.shape(support_logits_fusion)[-1]])
@@ -1131,6 +1148,7 @@ class TRSN(tf.keras.Model):
         query_logits_attention = tf.nn.l2_normalize(query_logits_attention, -1)
         query_logits_fusion = tf.concat([query_logits, query_logits_attention], -1)
 
+        query_logits_fusion = self.vector_attention(query_logits_fusion, training=training) * query_logits_fusion
         logits_dim = tf.shape(support_logits_fusion)[-1]
         dim_shape = tf.shape(query_label)[-1]
 
@@ -1274,19 +1292,25 @@ class TRSN(tf.keras.Model):
         # print(mean, std, pm)
 
 
+multi_gpu = True
 seed = 100
 random.seed(seed)
-mirrored_strategy = tf.distribute.MirroredStrategy()
-with mirrored_strategy.scope():
-    model = TRSN(imageshape=(84, 84, 3), num_class=351)
+if multi_gpu is True:
+    mirrored_strategy = tf.distribute.MirroredStrategy()
+    with mirrored_strategy.scope():
+        model = FSLModel(imageshape=(84, 84, 3), num_class=64)
+else:
+    model = FSLModel(imageshape=(84, 84, 3), num_class=64)
+# model.run(weights="/data/giraffe/0_FSL/{}_ckpts/latest.h5".format(model_name))
+# model.run()
 # model.run(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5")
 # model.fine_tune(lr=0.005)
 # model.run(weights="model_e238-l 0.86049.h5",
 #           data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
 
-model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5",
-                lr=0.005,
-                )
+# model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5",
+#                 lr=0.005,
+#                 )
 
 # model.run(weights="model_e335-l 0.86331.h5",
 #           data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
@@ -1315,7 +1339,7 @@ model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h
 # model.show("model_e112-l 0.85147.h5")
 # model.show("/data2/giraffe/0_FSL/TRSN_ckpts/model_e078-l 0.93898.h5",
 #            data_dir_path="/data/giraffe/0_FSL/data/CUB_200_2011/CUB_200_2011/processed_images_224_crop")
-# model.show("/data2/giraffe/0_FSL/TRSN_ckpts/model_e013-l 0.92509.h5")
+model.show("/data2/giraffe/0_FSL/TRSN__ckpts/model_e011-l 0.84931.h5")
 # model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e491-l 0.84962.h5", shots=1)
 # model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e491-l 0.84962.h5", shots=5)
 # model.fine_tune(lr=0.0001, weights=""/data/giraffe/0_FSL/TRSN_ckpts/model_e328-l 0.83613.h5"")

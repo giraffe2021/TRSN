@@ -1,13 +1,15 @@
 import tensorflow as tf
-# try:
-#     from .DropBlock import DropBlock2D
-# except:
-#     from DropBlock import DropBlock2D
-from .DropBlock import DropBlock2D
+try:
+    from .DropBlock import DropBlock2D
+except:
+    from DropBlock import DropBlock2D
+# from .DropBlock import DropBlock2D
 import math
 
 DATA_FORMAT = 'channels_last'
 bn_momentum = 0.9
+drop_rate = 0.2
+kernel_initializer = 'he_normal'
 
 
 def make_basic_block(inputs, filter_num, use_bias=True, drop_rate=0., drop_block=False, dropblock_size=1,
@@ -15,7 +17,7 @@ def make_basic_block(inputs, filter_num, use_bias=True, drop_rate=0., drop_block
     shortcut = tf.keras.Sequential([tf.keras.layers.Conv2D(filters=filter_num,
                                                            kernel_size=(1, 1),
                                                            strides=1,
-                                                           kernel_initializer='he_normal',
+                                                           kernel_initializer=kernel_initializer,
                                                            kernel_regularizer=tf.keras.regularizers.l2(
                                                                0.0005),
                                                            use_bias=use_bias,
@@ -26,7 +28,7 @@ def make_basic_block(inputs, filter_num, use_bias=True, drop_rate=0., drop_block
     x = tf.keras.Sequential([tf.keras.layers.Conv2D(filters=filter_num,
                                                     kernel_size=(3, 3),
                                                     strides=1,
-                                                    kernel_initializer='he_normal',
+                                                    kernel_initializer=kernel_initializer,
                                                     kernel_regularizer=tf.keras.regularizers.l2(
                                                         0.0005),
                                                     use_bias=use_bias,
@@ -38,7 +40,7 @@ def make_basic_block(inputs, filter_num, use_bias=True, drop_rate=0., drop_block
                              tf.keras.layers.Conv2D(filters=filter_num,
                                                     kernel_size=(3, 3),
                                                     strides=1,
-                                                    kernel_initializer='he_normal',
+                                                    kernel_initializer=kernel_initializer,
                                                     kernel_regularizer=tf.keras.regularizers.l2(
                                                         0.0005),
                                                     use_bias=use_bias,
@@ -50,7 +52,7 @@ def make_basic_block(inputs, filter_num, use_bias=True, drop_rate=0., drop_block
                              tf.keras.layers.Conv2D(filters=filter_num,
                                                     kernel_size=(3, 3),
                                                     strides=1,
-                                                    kernel_initializer='he_normal',
+                                                    kernel_initializer=kernel_initializer,
                                                     kernel_regularizer=tf.keras.regularizers.l2(
                                                         0.0005),
                                                     use_bias=use_bias,
@@ -80,21 +82,20 @@ def make_basic_block(inputs, filter_num, use_bias=True, drop_rate=0., drop_block
 # This ResNet network was designed following the practice of the following papers:
 # TADAM: Task dependent adaptive metric for improved few-shot learning (Oreshkin et al., in NIPS 2018) and
 # A Simple Neural Attentive Meta-Learner (Mishra et al., in ICLR 2018).
-
 def ResNet_12(input_shape=(84, 84, 3), pooling=False, use_bias=False,
               name="resnet12"):
     img_input = tf.keras.layers.Input(shape=input_shape)
-
-    x = make_basic_block(img_input, use_bias=use_bias, filter_num=64, drop_rate=0.2,
+    x = tf.keras.layers.ZeroPadding2D(padding=(1, 1), name='conv1_pad')(img_input)
+    x = make_basic_block(x, use_bias=use_bias, filter_num=64, drop_rate=drop_rate,
                          pooling=True)
 
-    x = make_basic_block(x, use_bias=use_bias, filter_num=160, drop_rate=0.2,
+    x = make_basic_block(x, use_bias=use_bias, filter_num=160, drop_rate=drop_rate,
                          pooling=True)
 
-    x = make_basic_block(x, use_bias=use_bias, filter_num=320, drop_rate=0.2, drop_block=True, dropblock_size=5,
+    x = make_basic_block(x, use_bias=use_bias, filter_num=320, drop_rate=drop_rate, drop_block=True, dropblock_size=5,
                          pooling=True)
 
-    x = make_basic_block(x, use_bias=use_bias, filter_num=640, drop_rate=0.2, drop_block=True, dropblock_size=5,
+    x = make_basic_block(x, use_bias=use_bias, filter_num=640, drop_rate=drop_rate, drop_block=True, dropblock_size=5,
                          pooling=False)
 
     if pooling == 'avg':
@@ -106,5 +107,5 @@ def ResNet_12(input_shape=(84, 84, 3), pooling=False, use_bias=False,
     return model
 
 #
-# m = ResNet_12()
-# m.summary()
+m = ResNet_12()
+m.summary()

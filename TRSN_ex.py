@@ -130,6 +130,7 @@ class TRSN(tf.keras.Model):
                                                          name="self_attention_referenced_conv")
         self.self_attention_referenced_conv.build([None, feature_size_h, feature_size_w, feature_dim * 2])
 
+
         self.class_special_pos = Sequential([layers.Conv2D(64,
                                                            kernel_size=(1, 1),
                                                            strides=(1, 1),
@@ -721,7 +722,7 @@ class TRSN(tf.keras.Model):
         train_batch = 4
         episode_num = 1200
         steps_per_epoch = episode_num // train_batch
-        train_epoch = 20
+        train_epoch = 100
         mix_up = True
         augment = True
         total_epoch = 50
@@ -814,7 +815,7 @@ class TRSN(tf.keras.Model):
         train_batch = 4
         episode_num = 1200
         steps_per_epoch = episode_num // train_batch
-        train_epoch = 20
+        train_epoch = 10
         mix_up = True
         augment = True
         total_epoch = 200
@@ -977,11 +978,9 @@ class TRSN(tf.keras.Model):
 
             query_features = self.encoder(query_image, training=training)
             query_logits = self.gap(self.last_max_pooling(query_features))
-            _, q_f_h, q_f_w, q_f_c = tf.unstack(tf.shape(query_features))
             query_logits = tf.nn.l2_normalize(query_logits, -1)
-            support_logits_broad = tf.broadcast_to(support_logits_merge,
-                                                   [batch, ways * query_shots, f_h, q_f_w, f_c])
-            support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, q_f_w, f_c])
+            support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * query_shots, f_h, f_w, f_c])
+            support_logits_broad = tf.reshape(support_logits_broad, [-1, f_h, f_w, f_c])
             merge_feature_query = tf.concat([query_features, support_logits_broad], -1)
             query_self_attention = self.self_attention_referenced_conv(merge_feature_query, training=training)
             query_features = tf.nn.l2_normalize(query_features, -1)
@@ -1008,7 +1007,7 @@ class TRSN(tf.keras.Model):
             referenced_attention = transpose_and_reshape(referenced_attention)
 
             query_image = tf.reshape(query_image,
-                                     [batch, ways, query_shots, query_image.shape[-3], *query_image.shape[-2:]])
+                                     [batch, ways, query_shots, query_image.shape[-2], *query_image.shape[-2:]])
             query_self_attention = tf.reshape(query_self_attention, [batch, ways, query_shots, f_h, f_w, 1])
 
             query_image = transpose_and_reshape(query_image)
@@ -1019,15 +1018,15 @@ class TRSN(tf.keras.Model):
                         referenced_attention):
                 q_image = (q_image[..., ::-1] * 255).numpy().astype(np.uint8)
 
-            r_q_attention = tf.image.resize(r_q_attention * 255, q_image.shape[-3:-1],
-                                            method='bilinear').numpy().astype(
-                np.uint8)
-            r_q_attention = cv2.applyColorMap(r_q_attention, cv2.COLORMAP_JET)
-            r_q_attention = cv2.addWeighted(q_image, 0.5, r_q_attention, 0.5, 0)
+                r_q_attention = tf.image.resize(r_q_attention * 255, q_image.shape[-3:-1],
+                                                method='bilinear').numpy().astype(
+                    np.uint8)
+                r_q_attention = cv2.applyColorMap(r_q_attention, cv2.COLORMAP_JET)
+                r_q_attention = cv2.addWeighted(q_image, 0.5, r_q_attention, 0.5, 0)
 
-            q_show_image = cv2.hconcat([q_image, r_q_attention])
-            cv2.imshow("q_image", q_show_image)
-            cv2.waitKey(1)
+                q_show_image = cv2.hconcat([q_image, r_q_attention])
+                cv2.imshow("q_image", q_show_image)
+                cv2.waitKey(1)
 
             for image, origin_s_attention, q_image, origin_q_attention in \
                     zip(support_image,
@@ -1036,32 +1035,31 @@ class TRSN(tf.keras.Model):
                         query_self_attention):
                 image = (image[..., ::-1] * 255).numpy().astype(np.uint8)
 
-            origin_s_attention = tf.image.resize(origin_s_attention * 255, image.shape[-3:-1],
-                                                 method='bilinear').numpy().astype(
-                np.uint8)
-            origin_s_attention = cv2.applyColorMap(origin_s_attention, cv2.COLORMAP_JET)
-            origin_s_attention = cv2.addWeighted(image, 0.5, origin_s_attention, 0.5, 0)
+                origin_s_attention = tf.image.resize(origin_s_attention * 255, image.shape[-3:-1],
+                                                     method='bilinear').numpy().astype(
+                    np.uint8)
+                origin_s_attention = cv2.applyColorMap(origin_s_attention, cv2.COLORMAP_JET)
+                origin_s_attention = cv2.addWeighted(image, 0.5, origin_s_attention, 0.5, 0)
 
-            show_image = cv2.hconcat([image, origin_s_attention])
-            # show_image = cv2.hconcat([image, origin_s_attention])
-            # show_image = cv2.transpose(show_image)
+                show_image = cv2.hconcat([image, origin_s_attention])
+                # show_image = cv2.hconcat([image, origin_s_attention])
+                # show_image = cv2.transpose(show_image)
 
-            cv2.imshow("image", show_image)
+                cv2.imshow("image", show_image)
 
-            q_image = (q_image[..., ::-1] * 255).numpy().astype(np.uint8)
+                q_image = (q_image[..., ::-1] * 255).numpy().astype(np.uint8)
 
-            origin_q_attention = tf.image.resize(origin_q_attention * 255, q_image.shape[-3:-1],
-                                                 method='bilinear').numpy().astype(
-                np.uint8)
-            origin_q_attention = cv2.applyColorMap(origin_q_attention, cv2.COLORMAP_JET)
-            origin_q_attention = cv2.addWeighted(q_image, 0.5, origin_q_attention, 0.5, 0)
+                origin_q_attention = tf.image.resize(origin_q_attention * 255, q_image.shape[-3:-1],
+                                                     method='bilinear').numpy().astype(
+                    np.uint8)
+                origin_q_attention = cv2.applyColorMap(origin_q_attention, cv2.COLORMAP_JET)
+                origin_q_attention = cv2.addWeighted(q_image, 0.5, origin_q_attention, 0.5, 0)
 
-            q_show_image = cv2.hconcat([q_image, origin_q_attention])
-            cv2.imshow("q_show_image", q_show_image)
-            cv2.waitKey(0)
+                q_show_image = cv2.hconcat([q_image, origin_q_attention])
+                cv2.imshow("q_show_image", q_show_image)
+                cv2.waitKey(0)
 
-            # @tf.function
-
+    # @tf.function
     def test_step_meta(self, data):
         support, query = data
         support_image, support_label, _ = support
@@ -1278,20 +1276,16 @@ seed = 100
 random.seed(seed)
 mirrored_strategy = tf.distribute.MirroredStrategy()
 with mirrored_strategy.scope():
-    model = TRSN(imageshape=(84, 84, 3), num_class=351)
+    model = TRSN(imageshape=(84, 84, 3), num_class=64)
 # model.run(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5")
-# model.fine_tune(lr=0.005)
+# model.fine_tune()
 # model.run(weights="model_e238-l 0.86049.h5",
 #           data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
 
-model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5",
-                lr=0.005,
-                )
-
-# model.run(weights="model_e335-l 0.86331.h5",
-#           data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
-# model.fine_tune(lr=0.005, data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
-# model.fine_tune(weights="model_e335-l 0.86331.h5",
+# model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h5",
+#                 lr=0.005,
+#                 )
+# model.fine_tune(weights="model_e293-l 0.86280.h5",
 #                 lr=0.005,
 #                 data_dir_path="/data/giraffe/0_FSL/data/tiered_imagenet_tools/tiered_imagenet_224")
 
@@ -1315,7 +1309,7 @@ model.fine_tune(weights="/data/giraffe/0_FSL/TRRN_2_ckpts/model_e273-l 0.82473.h
 # model.show("model_e112-l 0.85147.h5")
 # model.show("/data2/giraffe/0_FSL/TRSN_ckpts/model_e078-l 0.93898.h5",
 #            data_dir_path="/data/giraffe/0_FSL/data/CUB_200_2011/CUB_200_2011/processed_images_224_crop")
-# model.show("/data2/giraffe/0_FSL/TRSN_ckpts/model_e013-l 0.92509.h5")
+model.show("/data2/giraffe/0_FSL/TRSN_ckpts/model_e195-l 0.80089.h5")
 # model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e491-l 0.84962.h5", shots=1)
 # model.test(weights="/data/giraffe/0_FSL/TRSN_ckpts/model_e491-l 0.84962.h5", shots=5)
 # model.fine_tune(lr=0.0001, weights=""/data/giraffe/0_FSL/TRSN_ckpts/model_e328-l 0.83613.h5"")

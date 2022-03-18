@@ -1,4 +1,5 @@
 import tensorflow as tf
+from functools import partial
 
 
 class DropBlock2D(tf.keras.layers.Layer):
@@ -58,7 +59,7 @@ class DropBlock2D(tf.keras.layers.Layer):
             tf.expand_dims(tf.tile(tf.expand_dims(tf.range(height), axis=1), [1, width]), axis=-1),
             tf.expand_dims(tf.tile(tf.expand_dims(tf.range(width), axis=0), [height, 1]), axis=-1),
         ], axis=-1)
-
+        # tf.print(tf.shape(positions))
         half_block_size = block_size // 2
         valid_seed_region = tf.keras.backend.switch(
             tf.keras.backend.all(
@@ -78,12 +79,12 @@ class DropBlock2D(tf.keras.layers.Layer):
         )
         return tf.expand_dims(tf.expand_dims(valid_seed_region, axis=0), axis=-1)
 
-    def _compute_drop_mask(self, inputs):
+    def _compute_drop_mask(self, inputs, block_size):
         shape = tf.shape(inputs)
         _, height, width, _ = tf.unstack(shape)
-        p = self._get_gamma(height, width, self.block_size, self.keep_prob)
+        p = self._get_gamma(height, width, block_size, self.keep_prob)
         mask = tf.keras.backend.random_bernoulli(shape, p=p)
-        mask *= self._compute_valid_seed_region(inputs, self.block_size)
+        mask *= self._compute_valid_seed_region(inputs, block_size)
         mask = self.pooling(mask)
         return 1.0 - mask
 
@@ -91,26 +92,30 @@ class DropBlock2D(tf.keras.layers.Layer):
 
         if training is None:
             training = tf.keras.backend.learning_phase()
+        shape = tf.shape(inputs)
+        _, r, w, c = tf.unstack(shape)
+        min_size = tf.math.minimum(tf.math.ceil(r / 2), tf.math.ceil(w / 2))
+        min_size = tf.cast(min_size, tf.int32)
+        block_size = tf.math.minimum(min_size, self.block_size)
+        # tf.print(block_size)
 
-        def dropped_inputs():
+        # @tf.function
+        def dropped_inputs(block_size):
             outputs = inputs
             if self.data_format == 'channels_first':
                 outputs = tf.transpose(outputs, [0, 2, 3, 1])
             shape = tf.shape(outputs)
             if self.sync_channels:
-                mask = self._compute_drop_mask(outputs[..., :1])
+                mask = self._compute_drop_mask(outputs[..., :1], block_size)
             else:
-                mask = self._compute_drop_mask(outputs)
+                mask = self._compute_drop_mask(outputs, block_size)
             outputs = outputs * mask * \
                       (tf.cast(tf.keras.backend.prod(shape), dtype=tf.float32) / tf.reduce_sum(mask))
             if self.data_format == 'channels_first':
                 outputs = tf.transpose(outputs, [0, 3, 1, 2])
             return outputs
 
-        # output = tf.cond(training,
-        #                  dropped_inputs,
-        #                  lambda: inputs)
         output = tf.python.keras.utils.tf_utils.smart_cond(training,
-                                                           dropped_inputs,
+                                                           partial(dropped_inputs, block_size=block_size),
                                                            lambda: tf.python.ops.array_ops.identity(inputs))
         return output
