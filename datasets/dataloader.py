@@ -150,6 +150,40 @@ def process_with_crop_with_contrastive(path, global_label,
         global_label, rotate_label_1, rotate_label_2, ratio_1, ratio_2)
 
 
+# @tf.function
+# def process_with_crop_with_contrastive(path, global_label,
+#                                        global_label_depth, p=0.5):
+#     image = tf.io.read_file(path)  # 根据路径读取图片
+#     image = tf.image.decode_jpeg(image, channels=3)  # 图片解码
+#     image = tf.cast(image, dtype=tf.float32) / 255.
+#     croped_image = random_resize_and_crop(image, ratio_min=0.8, ratio_max=4.)
+#     image = tf.image.resize(image, (center_crop_size, center_crop_size))
+#     chance = tf.random.uniform([], 0, 100, dtype=tf.int32)
+#
+#     @tf.function
+#     def process(x):
+#         x = horizontal_randomFlip(tf.expand_dims(x, 0))[0]
+#         x = color_jitter(x)
+#         x = color_drop(x)
+#         return x
+#
+#     augment_x = tf.case([(tf.less(chance, tf.cast(p * 100, dtype=tf.int32)),
+#                           lambda: process(image))],
+#                         default=lambda: image)
+#     crop_image_augment_x = tf.case([(tf.less(chance, tf.cast(p * 100, dtype=tf.int32)),
+#                                      lambda: process(croped_image))],
+#                                    default=lambda: croped_image)
+#
+#     x_rotated_1, rotate_label_1 = rotation_process_with_limit(augment_x)
+#     x_rotated_2, rotate_label_2 = rotation_process_with_limit(crop_image_augment_x)
+#     x_resized_1, ratio_1 = ratio_process(augment_x, ratio_min=0.25, ratio_max=2.25)
+#     x_resized_2, ratio_2 = ratio_process(crop_image_augment_x, ratio_min=0.25, ratio_max=2.25)
+#
+#     global_label = tf.one_hot(global_label, axis=-1, depth=global_label_depth)
+#     return (image, croped_image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2), (
+#         global_label, global_label, rotate_label_1, rotate_label_2, ratio_1, ratio_2)
+
+
 @tf.function
 def process_with_regular_crop(path, global_label,
                               global_label_depth, k=3):
@@ -688,14 +722,15 @@ if __name__ == '__main__':
 
     contrastive = True
     meta_train_ds, steps_per_epoch = dataloader.get_all_dataset(phase='train', batch=8,
-                                                                augment=True, contrastive=contrastive)
+                                                                augment=False, contrastive=contrastive)
 
     if contrastive:
         for x, y in meta_train_ds:
             image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2 = x
             y, rotate_label_1, rotate_label_2, resize_label_1, resize_label_2 = y
             for image, x_rotated_1, x_rotated_2, x_resized_1, x_resized_2, \
-                y, rotate_label_1, rotate_label_2, resize_label_1, resize_label_2 in zip(image, x_rotated_1,
+                y, rotate_label_1, rotate_label_2, resize_label_1, resize_label_2 in zip(image,
+                                                                                         x_rotated_1,
                                                                                          x_rotated_2,
                                                                                          x_resized_1, x_resized_2,
                                                                                          y, rotate_label_1,

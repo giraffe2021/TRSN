@@ -1,4 +1,5 @@
 import tensorflow as tf
+
 try:
     from .DropBlock import DropBlock2D
 except:
@@ -85,7 +86,8 @@ def make_basic_block(inputs, filter_num, use_bias=True, drop_rate=0., drop_block
 def ResNet_12(input_shape=(84, 84, 3), pooling=False, use_bias=False,
               name="resnet12"):
     img_input = tf.keras.layers.Input(shape=input_shape)
-    x = tf.keras.layers.ZeroPadding2D(padding=(1, 1), name='conv1_pad')(img_input)
+    x = img_input
+    x = tf.keras.layers.ZeroPadding2D(padding=(1, 1), name='conv1_pad')(x)
     x = make_basic_block(x, use_bias=use_bias, filter_num=64, drop_rate=drop_rate,
                          pooling=True)
 
@@ -105,6 +107,7 @@ def ResNet_12(input_shape=(84, 84, 3), pooling=False, use_bias=False,
 
     model = tf.keras.Model(img_input, x, name=name)
     return model
+
 
 #
 m = ResNet_12()
