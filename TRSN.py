@@ -2197,8 +2197,8 @@ version = "hinted"
 if multi_gpu is True:
     mirrored_strategy = tf.distribute.MirroredStrategy()
     with mirrored_strategy.scope():
-        model = FSLModel(imageshape=(84, 84, 3), num_class=351, version=version)
+        model = FSLModel(imagehape=(84, 84, 3), num_class=64, version=version)
 else:
-    model = FSLModel(imageshape=(84, 84, 3), num_class=351, version=version)
+    model = FSLModel(imageshape=(84, 84, 3), num_class=64, version=version)
 
 model.run()
