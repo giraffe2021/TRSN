@@ -419,7 +419,7 @@ class FSLModel(tf.keras.Model):
         total_loss = loss_clc + contrastive_neg_loss
         return total_loss, salient_loss
 
-    def meta_train_step_hintted(self, support, query, training=None):
+    def meta_train_step_hinted(self, support, query, training=None):
         support_image, support_label, support_global_label = support
         query_image, query_label, query_global_label = query
 
@@ -660,10 +660,10 @@ class FSLModel(tf.keras.Model):
 
         return logs
 
-    def train_step_normal_hintted(self, data):
+    def train_step_normal_hinted(self, data):
         support, query = data
         with tf.GradientTape() as tape:
-            total_loss, salient_loss = self.meta_train_step_hintted(support, query, True)
+            total_loss, salient_loss = self.meta_train_step_hinted(support, query, True)
         trainable_vars = self.encoder.trainable_weights \
                          + self.attention.trainable_weights \
                          + self.class_special_pos.trainable_weights \
@@ -908,7 +908,7 @@ class FSLModel(tf.keras.Model):
         }
         return logs
 
-    def train_step_meta_hintted(self, data):
+    def train_step_meta_hinted(self, data):
         support, query = data
         support_image, support_label, _ = support
         query_image, query_label, _ = query
@@ -1057,8 +1057,8 @@ class FSLModel(tf.keras.Model):
             self.train_step = self.train_step_normal
             self.test_step = self.test_step_meta_transductive
         else:
-            self.train_step = self.train_step_normal_hintted
-            self.test_step = self.test_step_meta_transductive_hintted
+            self.train_step = self.train_step_normal_hinted
+            self.test_step = self.test_step_meta_transductive_hinted
         # for data in meta_train_ds:
         #     self.train_step(data)
         # for data in meta_test_ds:
@@ -1149,8 +1149,8 @@ class FSLModel(tf.keras.Model):
             self.train_step = self.train_step_meta
             self.test_step = self.test_step_meta_transductive
         else:
-            self.train_step = self.train_step_meta_hintted
-            self.test_step = self.test_step_meta_transductive_hintted
+            self.train_step = self.train_step_meta_hinted
+            self.test_step = self.test_step_meta_transductive_hinted
 
         # for data in meta_train_ds:
         #     self.train_step(data)
@@ -1234,7 +1234,7 @@ class FSLModel(tf.keras.Model):
                                               [batch, ways * shots, tf.shape(support_logits)[-1]])
             support_logits_merge = tf.nn.l2_normalize(support_logits_merge, -1)
             support_logits_merge = tf.reduce_mean(support_logits_merge, 1)
-            if self.version == "hintted":
+            if self.version == "hinted":
                 support_logits_merge = tf.nn.l2_normalize(support_logits_merge, -1)
             support_logits_merge = tf.reshape(support_logits_merge, [batch, 1, 1, 1, f_c])
             support_logits_broad = tf.broadcast_to(support_logits_merge, [batch, ways * shots, f_h, f_w, f_c])
@@ -1521,7 +1521,7 @@ class FSLModel(tf.keras.Model):
         }
         return logs
 
-    def test_step_meta_hintted(self, data):
+    def test_step_meta_hinted(self, data):
         support, query = data
         support_image, support_label, _ = support
         query_image, query_label, _ = query
@@ -1664,7 +1664,7 @@ class FSLModel(tf.keras.Model):
 
     # @tf.function
     @tf.autograph.experimental.do_not_convert
-    def test_step_meta_transductive_hintted(self, data):
+    def test_step_meta_transductive_hinted(self, data):
         support, query = data
         support_image, support_label, _ = support
         query_image, query_label, _ = query
@@ -2193,12 +2193,12 @@ multi_gpu = False
 seed = 100
 random.seed(seed)
 version = "concate"
-version = "hintted"
+version = "hinted"
 if multi_gpu is True:
     mirrored_strategy = tf.distribute.MirroredStrategy()
     with mirrored_strategy.scope():
-        model = FSLModel(imageshape=(84, 84, 3), num_class=64, version=version)
+        model = FSLModel(imageshape=(84, 84, 3), num_class=351, version=version)
 else:
-    model = FSLModel(imageshape=(84, 84, 3), num_class=64, version=version)
+    model = FSLModel(imageshape=(84, 84, 3), num_class=351, version=version)
 
 model.run()
