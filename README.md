@@ -1,4 +1,4 @@
-# Task-related Saliency Network For Few-shot learning
+# Task-Related Saliency for Few-Shot Image Classification
 This is an official implementation in Tensorflow of TRSN.
 
 
@@ -6,10 +6,11 @@ This is an official implementation in Tensorflow of TRSN.
 ![](q_show_image_screenshot_10.11.2021.png)
 
 ## Abstract
-An essential cue of human wisdom in the few-shot classification task is that they can find the task-related targets by a glimpse of support images. Thus, we propose to divide the tackling of few-shot classification into three phases including Modeling, Analysing and Matching. In the modeling phase, we introduce a Saliency Sensitive Module (SSM), which is an inexact supervision task jointly trained with a standard multi-class classification task. SSM not only promote the representation ability of feature embedding, but also can locate the task-related saliency features. Therefore, we propose a self-training based Task-related Saliency Network (TRSN) to the learning of locating the saliency objects produced by SSM. In the analysing phase, we utilize TRSN to find out the task-related features. In the matching phase, we make the representation fused with task-related features to help samples matching their most related proto. We conduct extensive experiments on 5-way 1-shot and 5-way 5-shot settings to evaluate the proposed method. Results show that our method achieves a consistent performance gain on benchmarks. Moreover, our method is state-of-the-art on the fine-grained few-shot classification of CUB.
+A weakness of the existing metric-based few-shot classification method is that the model may be misled by the task-unrelated background since the small number of samples in the support set is not enough to reveal the local feature of the target from the background. An essential cue of human wisdom in the few-shot classification task is that they can find the task-related targets by a glimpse of support images. Thus, we propose to explicitly learn task-related saliency features and make use of them in the metric-based few-shot learning schema. We divide the tackling of the task into three phases, namely, the Modeling, the Analyzing, and the Matching. In the modeling phase, we introduce a Saliency Sensitive Module (SSM), which is an inexact supervision task jointly trained with a standard multi-class classification task. SSM not only enhances the fine-grained representation of feature embedding, but also can locate the task-related saliency features. Meanwhile, we propose a self-training-based Task-Related Saliency Network (TRSN) which is a lightweight network to distill task-related salience produced by SSM. In the analyzing phase, we freeze TRSN and use it to find out the task-related targets of novel tasks. In the matching phase, the fine-grained features enhanced by TRSN can promote the model to pay more attention to task-related objects. We conduct extensive experiments on 5-way 1-shot and 5-way 5-shot settings to evaluate the proposed method. Results show that our method achieves a consistent performance gain on benchmarks and achieves state-of-the-art. 
 ## Performance
 ![](miniimagenet.png)
 ![](CUB.png)
+![](cross.png)
 
 ### Environment
 - CUDA == 10.1
