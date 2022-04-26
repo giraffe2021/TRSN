@@ -722,7 +722,7 @@ if __name__ == '__main__':
 
     contrastive = True
     meta_train_ds, steps_per_epoch = dataloader.get_all_dataset(phase='train', batch=8,
-                                                                augment=False, contrastive=contrastive)
+                                                                augment=True, contrastive=contrastive)
 
     if contrastive:
         for x, y in meta_train_ds:
